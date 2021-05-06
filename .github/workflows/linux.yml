@@ -77,7 +77,7 @@ jobs:
       run: |
         mkdir /home/runner/work/hipSYCL/hipSYCL/build/tests-cpu
         cd /home/runner/work/hipSYCL/hipSYCL/build/tests-cpu
-        cmake -DHIPSYCL_PLATFORM=cpu -DhipSYCL_DIR=/home/runner/work/hipSYCL/hipSYCL/build/install/lib/cmake/hipSYCL /home/runner/work/hipSYCL/hipSYCL/tests
+        cmake -DCMAKE_CXX_COMPILER=/usr/bin/clang++-${{matrix.clang_version}} -DHIPSYCL_PLATFORM=cpu -DhipSYCL_DIR=/home/runner/work/hipSYCL/hipSYCL/build/install/lib/cmake/hipSYCL /home/runner/work/hipSYCL/hipSYCL/tests
         make -j2
     - name: build CUDA tests
       run: |
