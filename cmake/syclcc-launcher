@@ -44,6 +44,7 @@ if __name__ == '__main__':
   for command_offset, arg in enumerate(sys.argv[1:], 1):
     if arg.startswith(CXX_COMPILER_ARG):
       cxx_compiler_exe = arg[len(CXX_COMPILER_ARG):]
+      syclcc_specific_args.append("--hipsycl-cpu-cxx="+cxx_compiler_exe)
     elif arg.startswith(SYCLCC_ARG):
       # Split by non-path char, as on Windows it is required to run python path/to/syclcc,
       # instead of just syclcc. As we need "python" and "syclcc" two different array elements
