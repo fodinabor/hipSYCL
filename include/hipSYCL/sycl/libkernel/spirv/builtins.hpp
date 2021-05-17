@@ -30,7 +30,7 @@
 
 #include "hipSYCL/sycl/libkernel/backend.hpp"
 #include "hipSYCL/sycl/libkernel/vec.hpp"
-
+ 
 #include <cstdlib>
 #include <cmath>
 #include <type_traits>

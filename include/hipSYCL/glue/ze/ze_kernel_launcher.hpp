@@ -403,10 +403,8 @@ private:
     std::array<void *, kernel.get_num_components()> kernel_args;
     std::array<std::size_t, kernel.get_num_components()> arg_sizes;
 
-    for(std::size_t i = 0; i < kernel.get_num_components(); ++i) {
-      arg_sizes[i] = kernel.get_component_size();
-      kernel_args[i] = static_cast<void*>(kernel.get_components() + i);
-    }
+    arg_sizes[0] = sizeof(WrappedLambdaT);
+    kernel_args[0] = static_cast<void*>(kernel.get_components());
 
     std::string kernel_name_tag = __builtin_unique_stable_name(KernelName);
     std::string kernel_body_name = __builtin_unique_stable_name(KernelBodyT);
@@ -419,7 +417,7 @@ private:
     rt::result err = invoker->submit_kernel(
         this_module::get_module_id<rt::backend_id::level_zero>(), "spirv",
         kernel_image, num_groups, group_size, dynamic_local_mem,
-        kernel_args.data(), arg_sizes.data(), kernel_args.size(), kernel_name_tag,
+        kernel_args.data(), arg_sizes.data(), 1, kernel_name_tag,
         kernel_body_name);
 
     if (!err.is_success())

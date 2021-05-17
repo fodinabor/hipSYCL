@@ -124,10 +124,12 @@ if(WITH_LEVEL_ZERO_BACKEND)
     ze/ze_module.cpp)
   
   target_include_directories(rt-backend-ze PRIVATE ${HIPSYCL_SOURCE_DIR}/include)
+  target_link_directories(rt-backend-ze PRIVATE ${LLVM_PREFIX_DIR}/lib) # hardcoded ze lib path for windows..
   target_link_libraries(rt-backend-ze PRIVATE hipSYCL-rt -lze_loader)
 
 
   install(TARGETS rt-backend-ze
+        RUNTIME DESTINATION bin/hipSYCL
         LIBRARY DESTINATION lib/hipSYCL
         ARCHIVE DESTINATION lib/hipSYCL)
 endif()
