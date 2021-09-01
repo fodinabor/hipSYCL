@@ -90,14 +90,19 @@ jobs:
           if [[ "${{matrix.clang_version}}" == "12" ]]; then
             export CC=clang-12
             export CXX=clang++-12
+          elif [[ "${{matrix.clang_version}}" == "13" ]]; then
+            export CC=clang-13
+            export CXX=clang++-13
           fi
           if [[ "${{matrix.clang_version}}" != "11" ]]; then
           if [[ "${{matrix.splitter_pipeline}}" == "cbs" ]]; then
             export CXXFLAGS="$CXXFLAGS -fexperimental-new-pass-manager -fpass-plugin=/home/runner/work/hipSYCL/hipSYCL/build/install/lib/libhipSYCL_clang.so"
+          else
+            export CXXFLAGS="$CXXFLAGS -fno-experimental-new-pass-manager"
           fi
           fi
           
-          cmake -DHIPSYCL_PLATFORM=cpu -DhipSYCL_DIR=/home/runner/work/hipSYCL/hipSYCL/build/install/lib/cmake/hipSYCL -DCMAKE_CXX_FLAGS="$CXXFLAGS" /home/runner/work/hipSYCL/hipSYCL/tests
+          cmake -DHIPSYCL_PLATFORM=cpu -DhipSYCL_DIR=/home/runner/work/hipSYCL/hipSYCL/build/install/lib/cmake/hipSYCL -DCMAKE_CXX_FLAGS="$CXXFLAGS" -DOMP_CXX_FLAGS="$CXXFLAGS -fopenmp" /home/runner/work/hipSYCL/hipSYCL/tests
       - name: build CPU tests with loop splitting
         run: |
           cd /home/runner/work/hipSYCL/hipSYCL/build/tests-cpu
