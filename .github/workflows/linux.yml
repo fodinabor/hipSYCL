@@ -120,7 +120,7 @@ jobs:
       - name: run LIT tests on CPU
         run: |
           cd /home/runner/work/hipSYCL/hipSYCL/build/tests-cpu
-          LD_LIBRARY_PATH=/home/runner/work/hipSYCL/hipSYCL/build/install/lib make -j2 check
+          LD_LIBRARY_PATH=/home/runner/work/hipSYCL/hipSYCL/build/install/lib make check
       - name: run CPU tests
         continue-on-error: true
         run: |
