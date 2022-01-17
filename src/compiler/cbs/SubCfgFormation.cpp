@@ -664,7 +664,7 @@ void SubCFG::loadMultiSubCfgValues(
         if (auto *GEP = llvm::dyn_cast<llvm::GetElementPtrInst>(InstAllocaPair.first))
           if (auto *MDArrayified = GEP->getMetadata(hipsycl::compiler::MDKind::Arrayified)) {
             auto *NewGEP = llvm::cast<llvm::GetElementPtrInst>(
-                Builder.CreateInBoundsGEP(GEP->getPointerOperand(), {NewWIIndVar}, GEP->getName() + "c"));
+                Builder.CreateInBoundsGEP(GEP->getType(), GEP->getPointerOperand(), NewWIIndVar, GEP->getName() + "c"));
             NewGEP->setMetadata(hipsycl::compiler::MDKind::Arrayified, MDArrayified);
             VMap[InstAllocaPair.first] = NewGEP;
             continue;
@@ -827,7 +827,7 @@ void SubCFG::fixSingleSubCfgValues(llvm::DominatorTree &DT,
           if (auto *GEP = llvm::dyn_cast<llvm::GetElementPtrInst>(OPI))
             if (auto *MDArrayified = GEP->getMetadata(hipsycl::compiler::MDKind::Arrayified)) {
               auto *NewGEP = llvm::cast<llvm::GetElementPtrInst>(
-                  Builder.CreateInBoundsGEP(GEP->getPointerOperand(), {WIIndVar_}, GEP->getName() + "c"));
+                  Builder.CreateInBoundsGEP(GEP->getType(), GEP->getPointerOperand(), WIIndVar_, GEP->getName() + "c"));
               NewGEP->setMetadata(hipsycl::compiler::MDKind::Arrayified, MDArrayified);
               I.replaceUsesOfWith(OPI, NewGEP);
               InstLoadMap.insert({OPI, NewGEP});
@@ -910,7 +910,8 @@ llvm::BasicBlock *generateWhileSwitchAround(llvm::BasicBlock *PreHeader, llvm::B
   auto *WhileHeader =
       llvm::BasicBlock::Create(PreHeader->getContext(), "cbs.while.header", PreHeader->getParent(), OldEntry);
   llvm::IRBuilder Builder{WhileHeader, WhileHeader->getFirstInsertionPt()};
-  auto *LastID = Builder.CreateLoad(LastBarrierIdStorage, "cbs.while.last_barr.load");
+  auto *LastID =
+      Builder.CreateLoad(LastBarrierIdStorage->getAllocatedType(), LastBarrierIdStorage, "cbs.while.last_barr.load");
   auto *Switch = Builder.CreateSwitch(LastID, createUnreachableBlock(F), SubCFGs.size());
   for (auto &Cfg : SubCFGs) {
     Switch->addCase(Builder.getIntN(DL.getLargestLegalIntTypeSizeInBits(), Cfg.getEntryId()), Cfg.getEntry());
@@ -1037,8 +1038,8 @@ void arrayifyAllocas(llvm::BasicBlock *EntryBlock, llvm::DominatorTree &DT, std:
       auto *GepIp = SubCfg.getLoadBB()->getFirstNonPHIOrDbgOrLifetime();
 
       llvm::IRBuilder LoadBuilder{GepIp};
-      auto *GEP = llvm::cast<llvm::GetElementPtrInst>(
-          LoadBuilder.CreateInBoundsGEP(Alloca, {SubCfg.getWIIndVar()}, I->getName() + "_gep"));
+      auto *GEP = llvm::cast<llvm::GetElementPtrInst>(LoadBuilder.CreateInBoundsGEP(
+          Alloca->getAllocatedType(), Alloca, {SubCfg.getWIIndVar()}, I->getName() + "_gep"));
       GEP->setMetadata(hipsycl::compiler::MDKind::Arrayified, MDAlloca);
 
       llvm::replaceDominatedUsesWith(I, GEP, DT, SubCfg.getLoadBB());
@@ -1133,8 +1134,9 @@ void formSubCfgs(llvm::Function &F, llvm::LoopInfo &LI, llvm::DominatorTree &DT,
     IndVar = WILoop->getCanonicalInductionVariable();
   } else {
     Builder.SetInsertPoint(F.getEntryBlock().getTerminator());
-    IndVar = Builder.CreateLoad(llvm::UndefValue::get(
-        llvm::PointerType::get(getLoadForGlobalVariable(F, LocalIdGlobalNames[Dim - 1])->getType(), 0)));
+    auto *IndVarT = getLoadForGlobalVariable(F, LocalIdGlobalNames[Dim - 1])->getType();
+    IndVar = Builder.CreateLoad(IndVarT, llvm::UndefValue::get(
+        llvm::PointerType::get(IndVarT, 0)));
     VecInfo.setPinnedShape(*IndVar, hipsycl::compiler::VectorShape::cont());
   }
 
@@ -1239,8 +1241,8 @@ void createLoopsAroundKernel(llvm::Function &F, llvm::DominatorTree &DT, llvm::L
   const auto Dim = getRangeDim(F);
 
   llvm::IRBuilder Builder{F.getEntryBlock().getTerminator()};
-  llvm::Value *Idx = Builder.CreateLoad(llvm::UndefValue::get(
-      llvm::PointerType::get(getLoadForGlobalVariable(F, LocalIdGlobalNames[Dim - 1])->getType(), 0)));
+  auto *IndVarT = getLoadForGlobalVariable(F, LocalIdGlobalNames[Dim - 1])->getType();
+  llvm::Value *Idx = Builder.CreateLoad(IndVarT, llvm::UndefValue::get(llvm::PointerType::get(IndVarT, 0)));
 
   auto LocalSize = getLocalSizeValues(F, Dim);
   llvm::ValueToValueMapTy VMap;
