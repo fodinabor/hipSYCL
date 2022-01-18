@@ -79,7 +79,7 @@ endif()
 set(WITH_CUDA_BACKEND ${CUDA_FOUND} CACHE BOOL "Build hipSYCL support for NVIDIA GPUs with CUDA")
 set(WITH_ROCM_BACKEND ${ROCM_FOUND} CACHE BOOL "Build hipSYCL support for AMD GPUs with ROCm")
 
-if(APPLE or WIN32)
+if(APPLE OR WIN32)
 set(WITH_ACCELERATED_CPU false CACHE BOOL "Build hipSYCL compiler support for accelerating the CPU backend")
 else()
 set(WITH_ACCELERATED_CPU true CACHE BOOL "Build hipSYCL compiler support for accelerating the CPU backend")
