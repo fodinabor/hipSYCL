@@ -169,7 +169,21 @@ void registerPoclPipeline(llvm::ModulePassManager &MPM, OptLevel Opt) {
   FPM.addPass(WILoopMarkerPass{});
   FPM.addPass(LoopSplitterInliningPass{});
 
+  if (Opt != OptLevel::O0) {
+    FPM.addPass(KernelFlatteningPass{});
+    FPM.addPass(SimplifyKernelPass{});
+
+    MPM.addPass(llvm::createModuleToFunctionPassAdaptor(std::move(FPM)));
+    MPM.addPass(llvm::IPSCCPPass{});
+    FPM.addPass(llvm::InstCombinePass{});
+    FPM.addPass(llvm::SROA{});
+
+    FPM.addPass(llvm::SimplifyCFGPass{});
+  }
+
   FPM.addPass(SimplifyKernelPass{});
+  FPM.addPass(PHIsToAllocasPass{});
+  FPM.addPass(llvm::LoopSimplifyPass{});
 
   FPM.addPass(PHIsToAllocasPass{});
   FPM.addPass(IsolateRegionsPass{});

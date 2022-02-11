@@ -94,16 +94,17 @@ bool canonicalizeExitBarriers(llvm::Function &F, llvm::BasicBlock *WILatch, llvm
 bool reAadBarrierAtInnerLatches(const llvm::Loop *WILoop, hipsycl::compiler::SplitterAnnotationInfo &SAA) {
   bool Changed;
   for (auto *L : WILoop->getSubLoops()) {
-    auto *Latch = L->getLoopLatch();
-    assert(Latch && "Inner loops should be simplified!");
+    llvm::SmallVector<llvm::BasicBlock *> Latches;
+    L->getLoopLatches(Latches);
+    for(auto* Latch : Latches){
+      llvm::SmallVector<llvm::BasicBlock *, 4> Preds{llvm::pred_begin(Latch), llvm::pred_end(Latch)};
 
-    llvm::SmallVector<llvm::BasicBlock *, 4> Preds{llvm::pred_begin(Latch), llvm::pred_end(Latch)};
-
-    if (std::all_of(Preds.begin(), Preds.end(),
-                    [&SAA](auto *Pred) { return hipsycl::compiler::utils::endsWithBarrier(Pred, SAA); })) {
-      HIPSYCL_DEBUG_INFO << "[Canonicalize] Creating barrier at latch: " << Latch->getName() << "\n";
-      utils::createBarrier(Latch->getTerminator(), SAA);
-      Changed = true;
+      if (std::all_of(Preds.begin(), Preds.end(),
+                      [&SAA](auto *Pred) { return hipsycl::compiler::utils::endsWithBarrier(Pred, SAA); })) {
+        HIPSYCL_DEBUG_INFO << "[Canonicalize] Creating barrier at latch: " << Latch->getName() << "\n";
+        utils::createBarrier(Latch->getTerminator(), SAA);
+        Changed = true;
+      }
     }
   }
   return Changed;
