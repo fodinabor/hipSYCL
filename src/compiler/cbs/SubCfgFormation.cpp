@@ -58,8 +58,11 @@ llvm::Value *getLoadForGlobalVariable(llvm::Function &F, llvm::StringRef VarName
       }
     }
   }
-  llvm::IRBuilder Builder{F.getEntryBlock().getTerminator()};
-  return Builder.CreateLoad(F.getParent()->getDataLayout().getLargestLegalIntType(F.getContext()), GV);
+  if(GV) {
+    llvm::IRBuilder Builder{F.getEntryBlock().getTerminator()};
+    return Builder.CreateLoad(F.getParent()->getDataLayout().getLargestLegalIntType(F.getContext()), GV);
+  }
+  return nullptr;
 }
 
 std::size_t getRangeDim(llvm::Function &F) {
@@ -257,7 +260,7 @@ class SubCFG {
       llvm::BasicBlock *UniformLoadBB, llvm::ValueToValueMapTy &VMap);
   llvm::BasicBlock *createLoadBB(llvm::ValueToValueMapTy &VMap);
   llvm::BasicBlock *createUniformLoadBB(llvm::BasicBlock *OuterMostHeader);
-
+  
 public:
   SubCFG(llvm::BasicBlock *EntryBarrier, llvm::AllocaInst *LastBarrierIdStorage,
          const llvm::DenseMap<llvm::BasicBlock *, size_t> &BarrierIds, const llvm::Loop *WILoop,
@@ -669,12 +672,13 @@ void SubCFG::loadMultiSubCfgValues(
       }
     }
   }
-
+  
   llvm::ValueToValueMapTy UniVMap;
   UniVMap[WIIndVar_] = NewWIIndVar;
   for (size_t D = 0; D < Dim; ++D) {
     auto *Load = getLoadForGlobalVariable(*LoadBB_->getParent(), LocalIdGlobalNames[D]);
-    UniVMap[Load] = VMap[Load];
+    if(Load)
+      UniVMap[Load] = VMap[Load];
   }
   for (auto &InstAllocaPair : BaseInstAllocaMap) {
     auto *IP = UniformLoadTerm;
