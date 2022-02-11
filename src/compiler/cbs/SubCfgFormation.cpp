@@ -58,11 +58,15 @@ llvm::Value *getLoadForGlobalVariable(llvm::Function &F, llvm::StringRef VarName
       }
     }
   }
-  if(GV) {
-    llvm::IRBuilder Builder{F.getEntryBlock().getTerminator()};
+  llvm::IRBuilder Builder{F.getEntryBlock().getTerminator()};
+  const auto &DL = F.getParent()->getDataLayout();
+  if (GV) {
     return Builder.CreateLoad(F.getParent()->getDataLayout().getLargestLegalIntType(F.getContext()), GV);
+  } else { // global var might be cleaned up already if the id aint used in this kernel..
+    return Builder.CreateLoad(
+        DL.getLargestLegalIntType(F.getContext()),
+        llvm::UndefValue::get(llvm::Type::getIntNPtrTy(F.getContext(), DL.getLargestLegalIntTypeSizeInBits())));
   }
-  return nullptr;
 }
 
 std::size_t getRangeDim(llvm::Function &F) {
@@ -260,7 +264,10 @@ class SubCFG {
       llvm::BasicBlock *UniformLoadBB, llvm::ValueToValueMapTy &VMap);
   llvm::BasicBlock *createLoadBB(llvm::ValueToValueMapTy &VMap);
   llvm::BasicBlock *createUniformLoadBB(llvm::BasicBlock *OuterMostHeader);
-  
+
+  llvm::SmallVector<llvm::Instruction *, 16>
+  topoSortInstructions(const llvm::SmallPtrSet<llvm::Instruction *, 16> &UniquifyInsts) const;
+
 public:
   SubCFG(llvm::BasicBlock *EntryBarrier, llvm::AllocaInst *LastBarrierIdStorage,
          const llvm::DenseMap<llvm::BasicBlock *, size_t> &BarrierIds, const llvm::Loop *WILoop,
@@ -672,14 +679,17 @@ void SubCFG::loadMultiSubCfgValues(
       }
     }
   }
-  
+
   llvm::ValueToValueMapTy UniVMap;
-  UniVMap[WIIndVar_] = NewWIIndVar;
-  for (size_t D = 0; D < Dim; ++D) {
-    auto *Load = getLoadForGlobalVariable(*LoadBB_->getParent(), LocalIdGlobalNames[D]);
-    if(Load)
-      UniVMap[Load] = VMap[Load];
+  UniVMap[this->WIIndVar_] = NewWIIndVar;
+
+  // copy local id load value to univmap
+  for (size_t D = 0; D < this->Dim; ++D) {
+    auto *Load = getLoadForGlobalVariable(*this->LoadBB_->getParent(), LocalIdGlobalNames[D]);
+    UniVMap[Load] = VMap[Load];
   }
+
+  // load uniform values from allocas
   for (auto &InstAllocaPair : BaseInstAllocaMap) {
     auto *IP = UniformLoadTerm;
     HIPSYCL_DEBUG_INFO << "[SubCFG] Load base value from Alloca " << *InstAllocaPair.second << " in "
@@ -689,36 +699,69 @@ void SubCFG::loadMultiSubCfgValues(
     UniVMap[InstAllocaPair.first] = Load;
   }
 
-  llvm::SmallPtrSet<llvm::Instruction *, 16> InstsToRemap;
+  // get a set of unique contiguous instructions
+  llvm::SmallPtrSet<llvm::Instruction *, 16> UniquifyInsts;
+  for (auto &Pair : ContInstReplicaMap) {
+    UniquifyInsts.insert(Pair.first);
+    for (auto &Target : Pair.second)
+      UniquifyInsts.insert(Target);
+  }
 
-  // todo: topo sort on instructions to get order right
-  for (auto &InstContInstsPair : ContInstReplicaMap) {
-    if (UniVMap.count(InstContInstsPair.first))
+  auto OrderedInsts = topoSortInstructions(UniquifyInsts);
+
+  llvm::SmallPtrSet<llvm::Instruction *, 16> InstsToRemap;
+  // clone the contiguous instructions to restore the used values
+  for (auto *I : OrderedInsts) {
+    if (UniVMap.count(I))
       continue;
 
-    HIPSYCL_DEBUG_INFO << "[SubCFG] Clone cont instruction and operands of: " << *InstContInstsPair.first << " to "
+    HIPSYCL_DEBUG_INFO << "[SubCFG] Clone cont instruction and operands of: " << *I << " to "
                        << LoadTerm->getParent()->getName() << "\n";
-    auto *IClone = InstContInstsPair.first->clone();
+    auto *IClone = I->clone();
     IClone->insertBefore(LoadTerm);
     InstsToRemap.insert(IClone);
-    UniVMap[InstContInstsPair.first] = IClone;
-    if (VMap.count(InstContInstsPair.first) == 0)
-      VMap[InstContInstsPair.first] = IClone;
+    UniVMap[I] = IClone;
+    if (VMap.count(I) == 0)
+      VMap[I] = IClone;
     HIPSYCL_DEBUG_INFO << "[SubCFG] Clone cont instruction: " << *IClone << "\n";
-    for (auto *Inst : InstContInstsPair.second) {
-      if (UniVMap.count(Inst))
-        continue;
-      IClone = Inst->clone();
-      IClone->insertBefore(LoadTerm);
-      InstsToRemap.insert(IClone);
-      UniVMap[Inst] = IClone;
-      if (VMap.count(Inst) == 0)
-        VMap[Inst] = IClone;
-      HIPSYCL_DEBUG_INFO << "[SubCFG] Clone cont instruction: " << *IClone << "\n";
-    }
   }
+
+  // finally remap the singular instructions to use the other cloned contiguous instructions /
+  // uniform values
   for (auto *IToRemap : InstsToRemap)
     remapInstruction(IToRemap, UniVMap);
+}
+
+llvm::SmallVector<llvm::Instruction *, 16>
+SubCFG::topoSortInstructions(const llvm::SmallPtrSet<llvm::Instruction *, 16> &UniquifyInsts) const {
+  llvm::SmallVector<llvm::Instruction *, 16> OrderedInsts(UniquifyInsts.size());
+  std::copy(UniquifyInsts.begin(), UniquifyInsts.end(), OrderedInsts.begin());
+
+  auto IsUsedBy = [](llvm::Instruction *LHS, llvm::Instruction *RHS) {
+    for (auto *U : LHS->users()) {
+      if (U == RHS)
+        return true;
+    }
+    return false;
+  };
+  for (int I = 0; I < OrderedInsts.size(); ++I) {
+    int InsertAt = I;
+    for (int J = OrderedInsts.size() - 1; J > I; --J) {
+      if (IsUsedBy(OrderedInsts[J], OrderedInsts[I])) {
+        InsertAt = J;
+        break;
+      }
+    }
+    if (InsertAt != I) {
+      auto *Tmp = OrderedInsts[I];
+      for (int J = I + 1; J <= InsertAt; ++J) {
+        OrderedInsts[J - 1] = OrderedInsts[J];
+      }
+      OrderedInsts[InsertAt] = Tmp;
+      --I;
+    }
+  }
+  return OrderedInsts;
 }
 
 llvm::BasicBlock *SubCFG::createUniformLoadBB(llvm::BasicBlock *OuterMostHeader) {
