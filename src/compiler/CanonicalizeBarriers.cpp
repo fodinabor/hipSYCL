@@ -94,7 +94,7 @@ bool canonicalizeExitBarriers(llvm::Function &F, llvm::BasicBlock *WILatch, llvm
 bool reAadBarrierAtInnerLatches(const llvm::Loop *WILoop, hipsycl::compiler::SplitterAnnotationInfo &SAA) {
   bool Changed;
   for (auto *L : WILoop->getSubLoops()) {
-    llvm::SmallVector<llvm::BasicBlock *> Latches;
+    llvm::SmallVector<llvm::BasicBlock *, 4> Latches;
     L->getLoopLatches(Latches);
     for(auto* Latch : Latches){
       llvm::SmallVector<llvm::BasicBlock *, 4> Preds{llvm::pred_begin(Latch), llvm::pred_end(Latch)};
