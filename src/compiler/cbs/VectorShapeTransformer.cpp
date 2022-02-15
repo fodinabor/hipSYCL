@@ -156,10 +156,7 @@ VectorShape VectorShapeTransformer::computeIdealShapeForInst(const Instruction &
             if (stride == 1 && (getObservedShape(BB, op1).getStride() == 1 || getObservedShape(BB, op2).getStride() == 1))
               return VectorShape::uni();
             break;
-          case CmpInst::Predicate::ICMP_SGE:
-          case CmpInst::Predicate::ICMP_UGE:
-          case CmpInst::Predicate::ICMP_SLE:
-          case CmpInst::Predicate::ICMP_ULE:
+          default:
             break;
         }
       }
