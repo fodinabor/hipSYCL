@@ -116,8 +116,8 @@ bool markLoopsWorkItem(llvm::Function &F, const llvm::LoopInfo &LI, const llvm::
     }
   }
 
-  if(F.hasFnAttribute(llvm::Attribute::NoInline) && !F.hasFnAttribute(llvm::Attribute::OptimizeNone))
-    F.removeFnAttr(llvm::Attribute::NoInline);
+  // if(F.hasFnAttribute(llvm::Attribute::NoInline) && !F.hasFnAttribute(llvm::Attribute::OptimizeNone))
+  //   F.removeFnAttr(llvm::Attribute::NoInline);
 
   if(!Changed){
     HIPSYCL_DEBUG_INFO << "[ParallelMarker] no wi loop found..?\n";
