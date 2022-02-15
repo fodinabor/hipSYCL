@@ -31,6 +31,7 @@
 #ifndef HIPSYCL_HOST_DETAIL_RV_SHUFFLE
 #define HIPSYCL_HOST_DETAIL_RV_SHUFFLE
 #include "rv.hpp"
+#include "hipSYCL/sycl/libkernel/backend.hpp"
 
 namespace hipsycl {
 namespace sycl {
@@ -46,6 +47,9 @@ namespace detail {
   }                                                                            \
   HIPSYCL_FORCE_INLINE TYPE intrin_insert(TYPE vec, std::uint32_t idx, TYPE val) {                  \
     return static_cast<TYPE>(rv_insert_##MangleSuffix(static_cast<BackupType>(vec), idx, val));                            \
+  } \
+  HIPSYCL_FORCE_INLINE TYPE intrin_reduce_add(TYPE vec) {                  \
+    return static_cast<TYPE>(rv_reduce_add_##MangleSuffix(static_cast<BackupType>(vec)));                            \
   }
 
 MANGLED_VARIANTS(float, float, f)

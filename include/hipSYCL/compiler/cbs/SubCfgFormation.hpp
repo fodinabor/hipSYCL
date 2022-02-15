@@ -33,7 +33,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/Pass.h"
 
-#if LLVM_VERSION_MAJOR <= 12
+#if LLVM_VERSION_MAJOR < 12
 #define HIPSYCL_NO_PHIS_IN_SPLIT
 #endif
 

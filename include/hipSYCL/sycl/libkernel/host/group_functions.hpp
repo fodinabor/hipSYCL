@@ -40,14 +40,20 @@
 
 #include "rv_shuffle.hpp"
 
+#include <type_traits>
+
 namespace hipsycl {
 namespace sycl {
 
-template<typename T, typename BinaryOperation>
-HIPSYCL_KERNEL_TARGET
-T group_reduce(sub_group g, T x, BinaryOperation binary_op) {
+
+template <typename T, typename BinaryOperation>
+HIPSYCL_KERNEL_TARGET auto group_reduce(sub_group g, T x,
+                                        BinaryOperation binary_op)
+    -> std::enable_if_t<
+        !std::is_same_v<sycl::plus<T>, std::decay_t<BinaryOperation>>
+        && !std::is_same_v<std::plus<T>, std::decay_t<BinaryOperation>>, T> {
 #ifdef HIPSYCL_HAS_RV
-  const size_t       lid        = g.get_local_linear_id();
+  const size_t lid = g.get_local_linear_id();
   const unsigned int activemask = rv_ballot(rv_mask());
 
   auto local_x = x;
@@ -63,29 +69,41 @@ T group_reduce(sub_group g, T x, BinaryOperation binary_op) {
 #endif
 }
 
+#ifdef HIPSYCL_HAS_RV
+template <typename T, typename BinaryOperation>
+HIPSYCL_KERNEL_TARGET auto group_reduce(sub_group g, T x, BinaryOperation)
+    -> std::enable_if_t<
+        std::is_same_v<sycl::plus<T>, std::decay_t<BinaryOperation>>
+        || std::is_same_v<std::plus<T>, std::decay_t<BinaryOperation>>, T> {
+  return detail::intrin_reduce_add(x);
+}
+
+#endif
+
 namespace detail {
 // reduce implementation
-template<typename Group, typename T, typename BinaryOperation>
-HIPSYCL_KERNEL_TARGET
-T group_reduce(Group g, T x, BinaryOperation binary_op, T *scratch) {
+template <typename Group, typename T, typename BinaryOperation>
+HIPSYCL_KERNEL_TARGET T group_reduce(Group g, T x, BinaryOperation binary_op,
+                                     T *scratch) {
 #ifdef HIPSYCL_HAS_RV
-  const auto   lid    = g.get_local_linear_id();
+  const auto lid = g.get_local_linear_id();
   const std::size_t local_range = g.get_local_range().size();
-  sub_group    sg{};
+  sub_group sg{};
 
   scratch[lid] = x;
   group_barrier(g);
 
   size_t i = 1;
 
-  if(lid < rv_num_lanes() && rv_num_lanes() <= local_range) {
-    for(i = rv_num_lanes(); i + rv_num_lanes() <= local_range; i += rv_num_lanes()) {
+  if (lid < rv_num_lanes() && rv_num_lanes() <= local_range) {
+    for (i = rv_num_lanes(); i + rv_num_lanes() <= local_range;
+         i += rv_num_lanes()) {
       x = binary_op(x, scratch[i + rv_lane_id()]);
     }
     x = group_reduce(sg, x, binary_op);
   }
-  if(g.leader()){
-    for(; i < local_range; ++i)
+  if (g.leader()) {
+    for (; i < local_range; ++i)
       x = binary_op(x, scratch[i]);
     scratch[0] = x;
   }
