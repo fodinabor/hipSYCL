@@ -148,17 +148,6 @@ VectorShape VectorShapeTransformer::computeIdealShapeForInst(const Instruction &
 
         if (stride >= 0 && alignment >= stride * vectorWidth)
           return VectorShape::uni();
-        switch(predicate) {
-          case CmpInst::Predicate::ICMP_SGT:
-          case CmpInst::Predicate::ICMP_UGT:
-          case CmpInst::Predicate::ICMP_SLT:
-          case CmpInst::Predicate::ICMP_ULT:
-            if (stride == 1 && (getObservedShape(BB, op1).getStride() == 1 || getObservedShape(BB, op2).getStride() == 1))
-              return VectorShape::uni();
-            break;
-          default:
-            break;
-        }
       }
       break;
 
