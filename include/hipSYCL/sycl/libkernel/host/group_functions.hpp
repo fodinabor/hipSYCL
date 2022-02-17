@@ -96,13 +96,19 @@ HIPSYCL_KERNEL_TARGET T group_reduce(Group g, T x, BinaryOperation binary_op,
   size_t i = 1;
 
   if (lid < rv_num_lanes() && rv_num_lanes() <= local_range) {
+    #pragma clang loop vectorize_width(1)
     for (i = rv_num_lanes(); i + rv_num_lanes() <= local_range;
          i += rv_num_lanes()) {
       x = binary_op(x, scratch[i + rv_lane_id()]);
     }
     x = group_reduce(sg, x, binary_op);
   }
+  
+  group_barrier(g); // as this starts a new loop with CBS,
+                    // LLVM detects it's actually just one iteration and optimizes it
+  
   if (g.leader()) {
+    #pragma clang loop vectorize_width(1)
     for (; i < local_range; ++i)
       x = binary_op(x, scratch[i]);
     scratch[0] = x;
