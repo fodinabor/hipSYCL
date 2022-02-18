@@ -86,6 +86,9 @@ jobs:
           if [[ "${{matrix.splitter_pipeline}}" == "cbs-manual-loops" ]]; then
             export CXXFLAGS="$CXXFLAGS -DHIPSYCL_MANUALLY_CREATED_LOOPS"
           fi
+          if [[ "${{matrix.clang_version}}" == "12" && "${{matrix.splitter_pipeline}}" == "cbs" ]]; then
+            export CXXFLAGS="$CXXFLAGS -DHIPSYCL_NO_PHIS_IN_SPLIT"
+          fi
           if [[ "${{matrix.clang_version}}" != "11" ]]; then
           if [[ "${{matrix.splitter_pipeline}}" == "cbs" || "${{matrix.splitter_pipeline}}" == "cbs-manual-loops" ]]; then
             export OMP_CXX_FLAGS="$CXXFLAGS -fexperimental-new-pass-manager -fpass-plugin=/home/runner/work/hipSYCL/hipSYCL/build/install/lib/libhipSYCL_clang.so"
@@ -95,13 +98,14 @@ jobs:
           fi
           echo "CC=${CC}" >> $GITHUB_ENV
           echo "CXX=${CXX}" >> $GITHUB_ENV
+          echo "CXXFLAGS=${CXXFLAGS}" >> $GITHUB_ENV
           echo "OMP_CXX_FLAGS=${OMP_CXX_FLAGS}" >> $GITHUB_ENV
       - name: build hipSYCL
         run: |
           mkdir build && cd build
           echo ${CXXFLAGS}
           
-          cmake -DCMAKE_CXX_COMPILER=/usr/bin/clang++-${{matrix.clang_version}} -DOMP_CXX_FLAGS="$OMP_CXX_FLAGS -fopenmp" -DCLANG_EXECUTABLE_PATH=/usr/bin/clang++-${{matrix.clang_version}} -DLLVM_DIR=/usr/lib/llvm-${{matrix.clang_version}}/cmake -DWITH_CUDA_BACKEND=ON -DCMAKE_INSTALL_PREFIX=`pwd`/install -DCUDA_TOOLKIT_ROOT_DIR=/opt/hipSYCL/cuda ..
+          cmake -DCMAKE_CXX_COMPILER=/usr/bin/clang++-${{matrix.clang_version}} -DCMAKE_CXX_FLAGS="${CXXFLAGS}" -DOMP_CXX_FLAGS="$OMP_CXX_FLAGS -fopenmp" -DCLANG_EXECUTABLE_PATH=/usr/bin/clang++-${{matrix.clang_version}} -DLLVM_DIR=/usr/lib/llvm-${{matrix.clang_version}}/cmake -DWITH_CUDA_BACKEND=ON -DCMAKE_INSTALL_PREFIX=`pwd`/install -DCUDA_TOOLKIT_ROOT_DIR=/opt/hipSYCL/cuda ..
           make -j2 install
           cp /opt/hipSYCL/cuda/lib64/stubs/libcuda.so `pwd`/install/lib/libcuda.so
           cp /opt/hipSYCL/cuda/lib64/stubs/libcuda.so `pwd`/install/lib/libcuda.so.1
