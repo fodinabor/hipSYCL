@@ -32,6 +32,7 @@
 #include "hipSYCL/compiler/VariableUniformityAnalysis.hpp"
 
 #include <llvm/Analysis/ScalarEvolution.h>
+#include <llvm/IR/Dominators.h>
 
 namespace hipsycl::compiler {
 char LoopSimplifyPassLegacy::ID = 0;
