@@ -33,6 +33,7 @@
 #include "hipSYCL/compiler/cbs/UniformityAnalysis.hpp"
 
 #include "hipSYCL/common/debug.hpp"
+#include "llvm/IR/GlobalVariable.h"
 
 #include <llvm/Analysis/PostDominators.h>
 #include <llvm/IR/Dominators.h>
