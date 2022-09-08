@@ -782,7 +782,7 @@ llvm::Instruction *WorkItemLoopCreator::addContextSave(llvm::Instruction *I, llv
   HIPSYCL_DEBUG_INFO << "indvar: " << WorkItemLoop->getCanonicalInductionVariable()->getName() << "\n";
   HIPSYCL_DEBUG_INFO << Alloca->getName() << "\n";
   llvm::outs().flush();
-  return Builder.CreateStore(I, Builder.CreateGEP(Alloca, GepArgs));
+  return Builder.CreateStore(I, Builder.CreateGEP(I->getType(), Alloca, GepArgs));
 }
 
 llvm::Instruction *WorkItemLoopCreator::addContextRestore(llvm::Value *Val, llvm::Instruction *Alloca,
@@ -814,14 +814,14 @@ llvm::Instruction *WorkItemLoopCreator::addContextRestore(llvm::Value *Val, llvm
     GepArgs.push_back(llvm::ConstantInt::get(llvm::Type::getInt32Ty(Alloca->getContext()), 0));
   assert(Alloca && GepArgs.size() && "beeeeeeep");
 
-  llvm::Instruction *GEP = llvm::dyn_cast<llvm::Instruction>(Builder.CreateGEP(Alloca, GepArgs));
+  llvm::Instruction *GEP = llvm::dyn_cast<llvm::Instruction>(Builder.CreateGEP(Val->getType(), Alloca, GepArgs));
   if (IsAlloca) {
     /* In case the context saved instruction was an alloca, we created a
        context array with pointed-to elements, and now want to return a
        pointer to the elements to emulate the original alloca. */
     return GEP;
   }
-  return Builder.CreateLoad(GEP);
+  return Builder.CreateLoad(Val->getType(), GEP);
 }
 
 /**

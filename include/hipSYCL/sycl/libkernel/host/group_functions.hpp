@@ -469,7 +469,7 @@ inline void group_barrier(Group g, memory_scope fence_scope = Group::fence_scope
 }
 
 template<>
-HIPSYCL_KERNEL_TARGET
+HIPSYCL_KERNEL_TARGET [[clang::annotate("hipsycl_sub_splitter")]]
 inline void group_barrier(sub_group g, memory_scope fence_scope) {
   // doesn't need sync
 }

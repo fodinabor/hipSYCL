@@ -42,6 +42,7 @@
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DIBuilder.h"
+#include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/IRBuilder.h"
@@ -366,7 +367,7 @@ void storeToAlloca(llvm::Value &ToStore, llvm::AllocaInst &DstAlloca, llvm::Valu
   assert(InsertBefore && "must have insertion point");
 
   llvm::IRBuilder WriteBuilder{InsertBefore};
-  auto *GEP = WriteBuilder.CreateInBoundsGEP(&DstAlloca, {&Idx}, ToStore.getName() + "_gep");
+  auto *GEP = WriteBuilder.CreateInBoundsGEP(ToStore.getType(), &DstAlloca, {&Idx}, ToStore.getName() + "_gep");
   WriteBuilder.CreateStore(&ToStore, GEP);
 }
 
@@ -450,7 +451,8 @@ void insertLifetimeEndForAllocas(llvm::Function *F, llvm::Value *Idx, llvm::Inst
                        return anyOfUsers<llvm::CallBase>(BCI, IsLifetimeEnd);
                      });
             })) {
-          auto *GEP = Builder.CreateInBoundsGEP(Alloca, {Idx}, Alloca->getName() + "_legep");
+          auto *GEP =
+              Builder.CreateInBoundsGEP(Alloca->getAllocatedType(), Alloca, {Idx}, Alloca->getName() + "_legep");
           Builder.CreateLifetimeEnd(GEP);
         }
       }
@@ -586,7 +588,7 @@ void moveNonIndVarOutOfHeader(llvm::Loop &L, llvm::Loop &PrevL, llvm::Value *Idx
 
         auto *IP = llvm::dyn_cast<llvm::Instruction>(PrevL.getLoopLatch()->getFirstNonPHIOrDbgOrLifetime());
         AllocaI = utils::arrayifyValue(Header->getParent()->getEntryBlock().getFirstNonPHIOrDbg(), FromPreHeaderV, IP,
-                                PrevL.getCanonicalInductionVariable());
+                                       PrevL.getCanonicalInductionVariable());
       }
       if (auto *FromLatchV = PhiI.getIncomingValueForBlock(L.getLoopLatch())) {
         // todo: might need an IP.. if value before first use or something..?
@@ -774,10 +776,11 @@ llvm::AllocaInst *arrayifyIncomingFromPreheader(llvm::PHINode *Phi, const llvm::
     // the newly created alloca, which is used exclusively in for the induction variable.
     // todo: if the value from the alloca is really only used as the initial value of the loop, it would be possible to
     //  re-use that alloca and reduce stack storage usage
-    auto *ToStore =
-        utils::loadFromAlloca(OrgAlloca, OldWIIdx, PrevLoop->getLoopLatch()->getFirstNonPHIOrDbgOrLifetime(), LInc->getName());
-    llvm::AllocaInst *IncAlloca = utils::arrayifyInstruction(LoadBlock->getParent()->getEntryBlock().getFirstNonPHIOrDbg(),
-                                                      ToStore, PrevLoop->getCanonicalInductionVariable());
+    auto *ToStore = utils::loadFromAlloca(OrgAlloca, OldWIIdx,
+                                          PrevLoop->getLoopLatch()->getFirstNonPHIOrDbgOrLifetime(), LInc->getName());
+    llvm::AllocaInst *IncAlloca =
+        utils::arrayifyInstruction(LoadBlock->getParent()->getEntryBlock().getFirstNonPHIOrDbg(), ToStore,
+                                   PrevLoop->getCanonicalInductionVariable());
 
     auto *NewLoad = utils::loadFromAlloca(IncAlloca, NewWIIdx, NewLoadIP, LInc->getName());
     utils::copyDgbValues(LInc, NewLoad, NewLoadIP);
@@ -785,7 +788,7 @@ llvm::AllocaInst *arrayifyIncomingFromPreheader(llvm::PHINode *Phi, const llvm::
     VMap[LInc] = NewLoad;
     VMap[Phi] = NewLoad;
     auto *Copied = utils::loadFromAlloca(IncAlloca, llvm::Constant::getNullValue(NewWIIdx->getType()),
-                                  InnerLoop->getLoopPreheader()->getFirstNonPHI(), LInc->getName());
+                                         InnerLoop->getLoopPreheader()->getFirstNonPHI(), LInc->getName());
     llvm::dropDebugUsers(*Phi);
 
     Phi->replaceUsesOfWith(LInc, Copied);
@@ -801,8 +804,8 @@ llvm::AllocaInst *arrayifyIncomingFromPreheader(llvm::PHINode *Phi, const llvm::
   } else { // constants
     auto *IP = PrevLoop->getLoopLatch()->getFirstNonPHIOrDbgOrLifetime();
 
-    llvm::AllocaInst *ValueAlloca = utils::arrayifyValue(LoadBlock->getParent()->getEntryBlock().getFirstNonPHIOrDbg(), VInc,
-                                                  IP, PrevLoop->getCanonicalInductionVariable());
+    llvm::AllocaInst *ValueAlloca = utils::arrayifyValue(LoadBlock->getParent()->getEntryBlock().getFirstNonPHIOrDbg(),
+                                                         VInc, IP, PrevLoop->getCanonicalInductionVariable());
     auto *Load = utils::loadFromAlloca(ValueAlloca, NewWIIdx, NewLoadIP, Phi->getName());
     utils::copyDgbValues(Phi, Load, NewLoadIP);
     llvm::dropDebugUsers(*Phi);
@@ -817,7 +820,8 @@ llvm::LoadInst *replaceIncomingFromLatchWithLoad(llvm::PHINode *Phi, const llvm:
                                                  llvm::AllocaInst *Alloca) {
   llvm::Value *IncV = Phi->getIncomingValueForBlock(InnerLoop->getLoopLatch());
   auto *IP = InnerLoop->getLoopLatch()->getTerminator();
-  auto *LoadI = utils::loadFromAlloca(Alloca, llvm::Constant::getNullValue(NewWIIdx->getType()), IP, IncV->getName() + "LL");
+  auto *LoadI =
+      utils::loadFromAlloca(Alloca, llvm::Constant::getNullValue(NewWIIdx->getType()), IP, IncV->getName() + "LL");
   Phi->replaceUsesOfWith(IncV, LoadI);
   storeToAlloca(*IncV, *Alloca, *NewWIIdx);
   return LoadI;

@@ -34,6 +34,8 @@
 #include <llvm/IR/LegacyPassManagers.h>
 #include <llvm/IR/PassManager.h>
 
+#include <map>
+
 namespace hipsycl {
 namespace compiler {
 

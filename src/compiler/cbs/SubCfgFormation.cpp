@@ -39,6 +39,7 @@
 #include <llvm/IR/Dominators.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/Verifier.h>
+#include <llvm/Support/Regex.h>
 #include <llvm/Transforms/Utils/BasicBlockUtils.h>
 #include <llvm/Transforms/Utils/Cloning.h>
 #include <llvm/Transforms/Utils/Local.h>
@@ -118,18 +119,18 @@ llvm::SmallVector<llvm::Value *, 3> getLocalSizeValues(llvm::Function &F, int Di
     llvm::IRBuilder Builder{F.getEntryBlock().getTerminator()};
     llvm::Value *LocalSizePtr = nullptr;
     if (!LocalSizeArg->getType()->isArrayTy())
-      LocalSizePtr = Builder.CreatePointerCast(
-          LocalSizeArg, llvm::Type::getIntNPtrTy(F.getContext(), DL.getLargestLegalIntTypeSizeInBits()),
-          "local_size.cast");
+      LocalSizePtr = Builder.CreatePointerCast(LocalSizeArg, llvm::Type::getIntNPtrTy(F.getContext(), SizeTSize),
+                                               "local_size.cast");
 
     llvm::SmallVector<llvm::Value *, 3> LocalSize;
     for (unsigned int I = 0; I < Dim; ++I) {
       if (LocalSizeArg->getType()->isArrayTy()) {
         LocalSize.push_back(Builder.CreateExtractValue(LocalSizeArg, {I}, "local_size." + llvm::Twine{DimName[I]}));
       } else {
-        auto *LocalSizeGep = Builder.CreateInBoundsGEP(LocalSizePtr, {Builder.getIntN(SizeTSize, I)},
-                                                       "local_size.gep." + llvm::Twine{DimName[I]});
-        LocalSize.push_back(Builder.CreateLoad(LocalSizeGep, "local_size." + llvm::Twine{DimName[I]}));
+        auto *LocalSizeGep =
+            Builder.CreateInBoundsGEP(DL.getLargestLegalIntType(F.getContext()), LocalSizePtr, {Builder.getIntN(SizeTSize, I)},
+                                      "local_size.gep." + llvm::Twine{DimName[I]});
+        LocalSize.push_back(Builder.CreateLoad(DL.getLargestLegalIntType(F.getContext()), LocalSizeGep, "local_size." + llvm::Twine{DimName[I]}));
       }
     }
     return LocalSize;
@@ -1135,8 +1136,7 @@ void formSubCfgs(llvm::Function &F, llvm::LoopInfo &LI, llvm::DominatorTree &DT,
   } else {
     Builder.SetInsertPoint(F.getEntryBlock().getTerminator());
     auto *IndVarT = getLoadForGlobalVariable(F, LocalIdGlobalNames[Dim - 1])->getType();
-    IndVar = Builder.CreateLoad(IndVarT, llvm::UndefValue::get(
-        llvm::PointerType::get(IndVarT, 0)));
+    IndVar = Builder.CreateLoad(IndVarT, llvm::UndefValue::get(llvm::PointerType::get(IndVarT, 0)));
     VecInfo.setPinnedShape(*IndVar, hipsycl::compiler::VectorShape::cont());
   }
 
