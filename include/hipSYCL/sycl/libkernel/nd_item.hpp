@@ -167,7 +167,7 @@ struct nd_item
 #ifdef HIPSYCL_ONDEMAND_ITERATION_SPACE_INFO
     return group<dimensions>{};
 #else
-    return group<dimensions>{_group_id, _local_range, _num_groups, _group_barrier, get_local_id(), _local_memory_ptr};
+    return group<dimensions>{_group_id, _local_range, _num_groups, _group_barrier, get_local_id(), _local_memory_ptr, _sub_local_memory_ptr};
 #endif
   }
 
@@ -195,7 +195,15 @@ struct nd_item
   HIPSYCL_KERNEL_TARGET
   sub_group get_sub_group() const
   {
+#if HIPSYCL_LIBKERNEL_IS_DEVICE_PASS_HIP ||                                    \
+    HIPSYCL_LIBKERNEL_IS_DEVICE_PASS_CUDA ||                                   \
+    HIPSYCL_LIBKERNEL_IS_DEVICE_PASS_SPIRV || defined(HIPSYCL_HAS_RV)
     return sub_group{};
+#else
+    return sub_group{static_cast<uint32_t>(get_local_linear_id()) / 32,
+                     (get_local_range().size() + 31) / 32,
+                     _sub_local_memory_ptr};
+#endif
   }
 
   HIPSYCL_KERNEL_TARGET
@@ -348,18 +356,17 @@ struct nd_item
   {}
 #else
   HIPSYCL_KERNEL_TARGET
-  nd_item(const id<dimensions>* offset,
-          id<dimensions> group_id, id<dimensions> local_id, 
-          range<dimensions> local_range, range<dimensions> num_groups,
+  nd_item(const id<dimensions>* offset, id<dimensions> group_id,
+          id<dimensions> local_id, range<dimensions> local_range,
+          range<dimensions> num_groups,
           detail::host_barrier_type* host_group_barrier = nullptr,
-          void* local_memory_ptr = nullptr)
-    : _offset{offset}, 
-      _group_id{group_id}, 
-      _local_id{local_id}, 
-      _local_range{local_range},
-      _num_groups{num_groups},
-      _global_id{group_id * local_range + local_id},
-      _local_memory_ptr(local_memory_ptr)
+          void* local_memory_ptr = nullptr,
+          void* sub_local_memory_ptr = nullptr)
+      : _offset{offset}, _group_id{group_id}, _local_id{local_id},
+        _local_range{local_range}, _num_groups{num_groups},
+        _global_id{group_id * local_range + local_id},
+        _local_memory_ptr(local_memory_ptr),
+        _sub_local_memory_ptr(sub_local_memory_ptr)
   {
 #ifndef SYCL_DEVICE_ONLY
     _group_barrier = host_group_barrier;
@@ -377,6 +384,7 @@ private:
   const range<dimensions> _num_groups;
   const id<dimensions> _global_id;
   void *_local_memory_ptr;
+  void *_sub_local_memory_ptr;
 #endif
 
 #ifndef SYCL_DEVICE_ONLY

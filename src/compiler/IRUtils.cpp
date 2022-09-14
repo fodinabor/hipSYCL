@@ -60,14 +60,28 @@ bool isBarrier(const llvm::Instruction *I, const SplitterAnnotationInfo &SAA) {
   return false;
 }
 
+bool isSubBarrier(const llvm::Instruction *I, const SplitterAnnotationInfo &SAA) {
+  if (const auto *CI = llvm::dyn_cast<llvm::CallInst>(I))
+    return CI->getCalledFunction() && SAA.isSubSplitterFunc(CI->getCalledFunction());
+  return false;
+}
+
 bool blockHasBarrier(const llvm::BasicBlock *BB, const hipsycl::compiler::SplitterAnnotationInfo &SAA) {
   return std::any_of(BB->begin(), BB->end(), [&SAA](const auto &I) { return isBarrier(&I, SAA); });
+}
+
+bool blockHasSubBarrier(const llvm::BasicBlock *BB, const hipsycl::compiler::SplitterAnnotationInfo &SAA) {
+  return std::any_of(BB->begin(), BB->end(), [&SAA](const auto &I) { return isSubBarrier(&I, SAA); });
 }
 
 // Returns true in case the given basic block starts with a barrier,
 // that is, contains a branch instruction after possible PHI nodes.
 bool startsWithBarrier(const llvm::BasicBlock *BB, const hipsycl::compiler::SplitterAnnotationInfo &SAA) {
   return isBarrier(BB->getFirstNonPHI(), SAA);
+}
+
+bool startsWithSubBarrier(const llvm::BasicBlock *BB, const hipsycl::compiler::SplitterAnnotationInfo &SAA) {
+  return isSubBarrier(BB->getFirstNonPHI(), SAA);
 }
 
 // Returns true in case the given basic block ends with a barrier,
@@ -78,8 +92,18 @@ bool endsWithBarrier(const llvm::BasicBlock *BB, const hipsycl::compiler::Splitt
   return BB->size() > 1 && T->getPrevNode() && isBarrier(T->getPrevNode(), SAA);
 }
 
+bool endsWithSubBarrier(const llvm::BasicBlock *BB, const hipsycl::compiler::SplitterAnnotationInfo &SAA) {
+  const llvm::Instruction *T = BB->getTerminator();
+  assert(T);
+  return BB->size() > 1 && T->getPrevNode() && isSubBarrier(T->getPrevNode(), SAA);
+}
+
 bool hasOnlyBarrier(const llvm::BasicBlock *BB, const hipsycl::compiler::SplitterAnnotationInfo &SAA) {
   return endsWithBarrier(BB, SAA) && BB->size() == 2;
+}
+
+bool hasOnlySubBarrier(const llvm::BasicBlock *BB, const hipsycl::compiler::SplitterAnnotationInfo &SAA) {
+  return endsWithSubBarrier(BB, SAA) && BB->size() == 2;
 }
 
 // Returns true in case the given function is a kernel with work-group
@@ -93,6 +117,25 @@ bool hasBarriers(const llvm::Function &F, const hipsycl::compiler::SplitterAnnot
         continue;
 
       if (hasOnlyBarrier(&BB, SAA) && BB.getTerminator()->getNumSuccessors() == 0)
+        continue;
+
+      return true;
+    }
+  }
+  return false;
+}
+
+// Returns true in case the given function is a kernel with work-group
+// barriers inside it.
+bool hasSubBarriers(const llvm::Function &F, const hipsycl::compiler::SplitterAnnotationInfo &SAA) {
+  for (auto &BB : F) {
+    if (blockHasSubBarrier(&BB, SAA)) {
+
+      // Ignore the implicit entry and exit barriers.
+      if (hasOnlySubBarrier(&BB, SAA) && &BB == &F.getEntryBlock())
+        continue;
+
+      if (hasOnlySubBarrier(&BB, SAA) && BB.getTerminator()->getNumSuccessors() == 0)
         continue;
 
       return true;
@@ -116,8 +159,24 @@ llvm::CallInst *createBarrier(llvm::Instruction *InsertBefore, SplitterAnnotatio
   return llvm::CallInst::Create(F, "", InsertBefore);
 }
 
+llvm::CallInst *createSubBarrier(llvm::Instruction *InsertBefore, SplitterAnnotationInfo &SAA) {
+  llvm::Module *M = InsertBefore->getParent()->getParent()->getParent();
+
+  if (InsertBefore != &InsertBefore->getParent()->front() && isSubBarrier(InsertBefore->getPrevNode(), SAA))
+    return llvm::cast<llvm::CallInst>(InsertBefore->getPrevNode());
+  llvm::Function *F = llvm::cast<llvm::Function>(
+      M->getOrInsertFunction(SubBarrierIntrinsicName, llvm::Type::getVoidTy(M->getContext())).getCallee());
+
+  F->addFnAttr(llvm::Attribute::NoDuplicate);
+  F->setLinkage(llvm::GlobalValue::LinkOnceAnyLinkage);
+  SAA.addSubSplitter(F);
+
+  return llvm::CallInst::Create(F, "", InsertBefore);
+}
+
 bool checkedInlineFunction(llvm::CallBase *CI, llvm::StringRef PassPrefix) {
-  if (CI->getCalledFunction()->isIntrinsic() || CI->getCalledFunction()->getName() == BarrierIntrinsicName)
+  if (CI->getCalledFunction()->isIntrinsic() || CI->getCalledFunction()->getName() == BarrierIntrinsicName ||
+      CI->getCalledFunction()->getName() == SubBarrierIntrinsicName)
     return false;
 
   // needed to be valid for success log

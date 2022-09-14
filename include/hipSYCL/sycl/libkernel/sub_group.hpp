@@ -293,6 +293,101 @@ private:
   std::size_t _item_linear_id;
   std::size_t _group_size;
 };
+#elif defined(HIPSYCL_HAS_CPU_SG)
+// On host, sub groups are always of some size
+
+extern size_t __hipsycl_sg_id;
+
+class sub_group
+{
+public:
+  using id_type = sycl::id<1>;
+  using range_type = sycl::range<1>;
+  using linear_id_type = uint32_t;
+  using linear_range_type = uint32_t;
+  
+  static constexpr int dimensions = 1;
+  static constexpr memory_scope fence_scope = memory_scope::sub_group;
+
+  explicit sub_group(linear_id_type group_id, std::size_t work_group_size, void *local_memory_ptr)
+      : _group_id(group_id)
+      , _work_group_size(work_group_size)
+      , _local_memory_ptr(local_memory_ptr) {}
+
+  HIPSYCL_KERNEL_TARGET
+  id_type get_local_id() const {
+    return id_type{__hipsycl_sg_id};
+  }
+
+  HIPSYCL_KERNEL_TARGET
+  linear_id_type get_local_linear_id() const {
+    return __hipsycl_sg_id;
+  }
+
+  HIPSYCL_KERNEL_TARGET
+  range_type get_local_range() const {
+    return range_type{get_local_linear_range()};
+  }
+
+  HIPSYCL_KERNEL_TARGET
+  linear_range_type get_local_linear_range() const {
+    return 32;
+  }
+
+  HIPSYCL_KERNEL_TARGET
+  range_type get_max_local_range() const {
+    return range_type{get_local_linear_range()};
+  }
+
+  HIPSYCL_KERNEL_TARGET
+  id_type get_group_id() const {
+    return id_type{_group_id};
+  }
+
+  HIPSYCL_KERNEL_TARGET
+  linear_id_type get_group_linear_id() const {
+    return _group_id;
+  }
+
+  HIPSYCL_KERNEL_TARGET
+  linear_range_type get_group_linear_range() const {
+    return _work_group_size;
+  }
+
+  HIPSYCL_KERNEL_TARGET
+  range_type get_group_range() const {
+    return (_work_group_size + get_local_linear_range() - 1) / get_local_linear_range();
+  }
+
+  [[deprecated]]
+  HIPSYCL_KERNEL_TARGET
+  range_type get_max_group_range() const {
+    return (_work_group_size + get_local_linear_range() - 1) / get_local_linear_range();
+  }
+
+  template<class F>
+  HIPSYCL_KERNEL_TARGET
+  void single_item(F f){
+    if(leader())
+      f();
+  }
+
+  HIPSYCL_KERNEL_TARGET
+  bool leader() const {
+    return __hipsycl_sg_id == 0;
+  }
+
+  HIPSYCL_KERNEL_TARGET
+  void *get_local_memory_ptr() const
+  {
+    return _local_memory_ptr;
+  }
+
+private:
+  std::size_t _group_id;
+  std::size_t _work_group_size;
+  void* _local_memory_ptr;
+};
 #else
 // On host, sub groups are always of size 1
 class sub_group
@@ -306,6 +401,8 @@ public:
   static constexpr int dimensions = 1;
   static constexpr memory_scope fence_scope = memory_scope::sub_group;
 
+  explicit sub_group(linear_id_type, std::size_t, void *local_memory_ptr)
+      : _local_memory_ptr(local_memory_ptr) {}
 
   HIPSYCL_KERNEL_TARGET
   id_type get_local_id() const {
@@ -371,9 +468,16 @@ public:
     return true;
   }
 
+  HIPSYCL_KERNEL_TARGET
+  void *get_local_memory_ptr() const
+  {
+    return _local_memory_ptr;
+  }
+
 private:
   std::size_t _item_linear_id;
   std::size_t _group_size;
+  void* _local_memory_ptr;
 };
 #endif
 

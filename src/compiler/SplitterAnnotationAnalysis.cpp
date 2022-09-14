@@ -39,7 +39,11 @@ std::basic_ostream<char> &operator<<(std::basic_ostream<char> &Ost, const llvm::
 }
 
 bool hipsycl::compiler::SplitterAnnotationInfo::analyzeModule(llvm::Module &M) {
-  if(auto* BarrIntrinsic = M.getFunction(hipsycl::compiler::BarrierIntrinsicName)) {
+  if (auto *BarrIntrinsic = M.getFunction(hipsycl::compiler::BarrierIntrinsicName)) {
+    SplitterFuncs.insert(BarrIntrinsic);
+    HIPSYCL_DEBUG_INFO << "Found splitter intrinsic " << BarrIntrinsic->getName() << "\n";
+  }
+  if (auto *BarrIntrinsic = M.getFunction(hipsycl::compiler::SubBarrierIntrinsicName)) {
     SplitterFuncs.insert(BarrIntrinsic);
     HIPSYCL_DEBUG_INFO << "Found splitter intrinsic " << BarrIntrinsic->getName() << "\n";
   }
@@ -48,24 +52,30 @@ bool hipsycl::compiler::SplitterAnnotationInfo::analyzeModule(llvm::Module &M) {
     if (I.getName() == "llvm.global.annotations") {
       auto *CA = llvm::dyn_cast<llvm::ConstantArray>(I.getOperand(0));
       for (auto *OI = CA->op_begin(); OI != CA->op_end(); ++OI) {
-        if (auto *CS = llvm::dyn_cast<llvm::ConstantStruct>(OI->get());
-            CS && CS->getNumOperands() >= 2)
+        if (auto *CS = llvm::dyn_cast<llvm::ConstantStruct>(OI->get()); CS && CS->getNumOperands() >= 2)
           if (auto *F = utils::getValueOneLevel<llvm::Function>(CS->getOperand(0)))
-            if (auto *AnnotationGL =
-                    utils::getValueOneLevel<llvm::GlobalVariable>(CS->getOperand(1)))
-              if (auto *Initializer =
-                      llvm::dyn_cast<llvm::ConstantDataArray>(AnnotationGL->getInitializer())) {
+            if (auto *AnnotationGL = utils::getValueOneLevel<llvm::GlobalVariable>(CS->getOperand(1)))
+              if (auto *Initializer = llvm::dyn_cast<llvm::ConstantDataArray>(AnnotationGL->getInitializer())) {
                 llvm::StringRef Annotation = Initializer->getAsCString();
                 if (Annotation.compare(SplitterAnnotation) == 0) {
                   SplitterFuncs.insert(F);
-                  HIPSYCL_DEBUG_INFO << "Found splitter annotated function " << F->getName()
-                                     << "\n";
+                  HIPSYCL_DEBUG_INFO << "Found splitter annotated function " << F->getName() << "\n";
+                } else if (Annotation.compare(SubSplitterAnnotation) == 0) {
+                  SubSplitterFuncs.insert(F);
+                  HIPSYCL_DEBUG_INFO << "Found sub splitter annotated function " << F->getName() << "\n";
                 } else if (Annotation.compare(KernelAnnotation) == 0) {
                   NDKernels.insert(F);
                   HIPSYCL_DEBUG_INFO << "Found kernel annotated function " << F->getName() << "\n";
                 }
               }
       }
+    }
+  }
+  // group_barrier(sub_group g, ) is a specialization of group_barrier(group g, ) which also has normal splitter
+  // annotation -> need to remove sub splitter from splitter..
+  for (auto SubSplitter : SubSplitterFuncs) {
+    if (SplitterFuncs.erase(SubSplitter)) {
+      HIPSYCL_DEBUG_INFO << "Yeah, " << SubSplitter->getName() << " is a sub splitter, no splitter\n";
     }
   }
   return false;
@@ -75,11 +85,15 @@ hipsycl::compiler::SplitterAnnotationInfo::SplitterAnnotationInfo(llvm::Module &
 
 void hipsycl::compiler::SplitterAnnotationInfo::print(llvm::raw_ostream &Stream) {
   Stream << "Splitters:\n";
-  for(auto* F : SplitterFuncs){
+  for (auto *F : SplitterFuncs) {
+    Stream << F->getName() << "\n";
+  }
+  Stream << "Sub Splitters:\n";
+  for (auto *F : SplitterFuncs) {
     Stream << F->getName() << "\n";
   }
   Stream << "NDRange Kernels:\n";
-  for(auto* F : NDKernels){
+  for (auto *F : NDKernels) {
     Stream << F->getName() << "\n";
   }
 }

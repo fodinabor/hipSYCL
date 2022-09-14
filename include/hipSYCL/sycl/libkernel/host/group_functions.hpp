@@ -7,22 +7,23 @@
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
  *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
+ * 1. Redistributions of source code must retain the above copyright notice,
+ * this list of conditions and the following disclaimer.
  * 2. Redistributions in binary form must reproduce the above copyright notice,
  *    this list of conditions and the following disclaimer in the documentation
  *    and/or other materials provided with the distribution.
  *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #ifndef SYCL_DEVICE_ONLY
@@ -45,13 +46,38 @@
 namespace hipsycl {
 namespace sycl {
 
+// barrier
+template <typename Group>
+HIPSYCL_KERNEL_TARGET [[clang::annotate("hipsycl_splitter")]] __attribute__((
+    noinline)) inline void
+group_barrier(Group g, memory_scope fence_scope = Group::fence_scope) {
+  if (fence_scope == memory_scope::work_item) {
+    // doesn't need sync
+  } else if (fence_scope == memory_scope::sub_group) {
+    // doesn't need sync (sub_group size = 1 or vectorization front)
+  } else if (fence_scope == memory_scope::work_group) {
+    g.barrier();
+  } else if (fence_scope == memory_scope::device) {
+    g.barrier();
+  }
+}
+
+template <>
+HIPSYCL_KERNEL_TARGET [[clang::annotate(
+    "hipsycl_sub_splitter")]] __attribute__((noinline)) inline void
+group_barrier(sub_group g, memory_scope fence_scope) {
+  // doesn't need sync
+}
 
 template <typename T, typename BinaryOperation>
 HIPSYCL_KERNEL_TARGET auto group_reduce(sub_group g, T x,
                                         BinaryOperation binary_op)
+#ifdef HIPSYCL_HAS_RV
     -> std::enable_if_t<
         !std::is_same_v<sycl::plus<T>, std::decay_t<BinaryOperation>>
-        && !std::is_same_v<std::plus<T>, std::decay_t<BinaryOperation>>, T> {
+        && !std::is_same_v<std::plus<T>, std::decay_t<BinaryOperation>>, T>
+#endif
+{
 #ifdef HIPSYCL_HAS_RV
   const size_t lid = g.get_local_linear_id();
   const unsigned int activemask = rv_ballot(rv_mask());
@@ -64,6 +90,17 @@ HIPSYCL_KERNEL_TARGET auto group_reduce(sub_group g, T x,
       local_x = binary_op(local_x, other_x);
   }
   return detail::extract_impl(local_x, 0);
+#elif defined(HIPSYCL_HAS_CPU_SG)
+  const size_t lid = g.get_local_linear_id();
+  const size_t lrange = g.get_local_linear_range();
+
+  auto local_x = x;
+
+  for (size_t i = lrange / 2; i > 0; i /= 2) {
+    auto other_x = shift_group_left(g, local_x, i);
+    local_x = binary_op(local_x, other_x);
+  }
+  return group_broadcast(g, local_x, 0);
 #else
   return x;
 #endif
@@ -119,6 +156,42 @@ HIPSYCL_KERNEL_TARGET T group_reduce(Group g, T x, BinaryOperation binary_op,
   group_barrier(g);
 
   return x;
+#elif defined(HIPSYCL_HAS_CPU_SG)
+  const auto warpSize = 32;
+  const auto lid = g.get_local_linear_id();
+  const size_t lrange = (g.get_local_range().size() + warpSize - 1) / warpSize;
+  sub_group sg{static_cast<unsigned int>(lid / warpSize), lrange,
+               g.get_sub_group_local_memory_ptr()};
+
+  x = group_reduce(sg, x, binary_op);
+  if (sg.leader())
+    scratch[sg.get_group_linear_id()] = x;
+
+  group_barrier(g);
+
+  if (lrange == 1)
+    return scratch[0];
+
+  if (g.get_local_range().size() / warpSize != warpSize) {
+    size_t outputs = lrange;
+    for (size_t i = (lrange + 1) / 2; i > 1; i = (i + 1) / 2) {
+      if (lid < i && lid + i < outputs)
+        scratch[lid] = binary_op(scratch[lid], scratch[lid + i]);
+      outputs = outputs / 2 + outputs % 2;
+      group_barrier(g);
+    }
+    group_barrier(g);
+    return binary_op(scratch[0], scratch[1]);
+  } else {
+    if (lid < warpSize)
+      x = group_reduce(sg, scratch[lid], binary_op);
+
+    if (lid == 0)
+      scratch[0] = x;
+
+    group_barrier(g);
+  }
+  return scratch[0];
 #else
   const size_t lid = g.get_local_linear_id();
 
@@ -448,30 +521,22 @@ T group_broadcast(sub_group g, T x,
                   typename sub_group::linear_id_type local_linear_id = 0) {
 #ifdef HIPSYCL_HAS_RV
   return detail::extract_impl(x, local_linear_id);
+#elif defined(HIPSYCL_HAS_CPU_SG)
+  T *scratch = static_cast<T *>(g.get_local_memory_ptr());
+  const size_t lid = g.get_local_linear_id();
+
+  if (lid == local_linear_id) {
+    scratch[0] = x;
+  }
+
+  group_barrier(g);
+  T tmp = scratch[0];
+  group_barrier(g);
+
+  return tmp;
 #else
   return x;
 #endif
-}
-
-// barrier
-template<typename Group>
-HIPSYCL_KERNEL_TARGET [[clang::annotate("hipsycl_splitter")]]
-inline void group_barrier(Group g, memory_scope fence_scope = Group::fence_scope) {
-  if (fence_scope == memory_scope::work_item) {
-    // doesn't need sync
-  } else if (fence_scope == memory_scope::sub_group) {
-    // doesn't need sync (sub_group size = 1 or vectorization front)
-  } else if (fence_scope == memory_scope::work_group) {
-    g.barrier();
-  } else if (fence_scope == memory_scope::device) {
-    g.barrier();
-  }
-}
-
-template<>
-HIPSYCL_KERNEL_TARGET [[clang::annotate("hipsycl_sub_splitter")]]
-inline void group_barrier(sub_group g, memory_scope fence_scope) {
-  // doesn't need sync
 }
 
 // any_of
@@ -709,6 +774,22 @@ template<typename T>
 T shift_group_left(sub_group g, T x, typename sub_group::linear_id_type delta = 1) {
 #ifdef HIPSYCL_HAS_RV
   return detail::shuffle_down_impl(x, delta);
+#elif defined(HIPSYCL_HAS_CPU_SG)
+  T *scratch = static_cast<T *>(g.get_local_memory_ptr());
+
+  typename sub_group::linear_id_type lid = g.get_local_linear_id();
+  typename sub_group::linear_id_type target_lid = lid + delta;
+
+  scratch[lid] = x;
+  group_barrier(g);
+
+  if (target_lid > g.get_local_range().size())
+    target_lid = 0;
+
+  x = scratch[target_lid];
+  group_barrier(g);
+
+  return x;
 #else
   return x;
 #endif

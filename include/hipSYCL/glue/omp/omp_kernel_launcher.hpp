@@ -187,7 +187,7 @@ template <class StaticPropertyList, int Dim, class Function, class ...Reducers>
 [[clang::annotate("hipsycl_nd_kernel")]] __attribute__((noinline))
 inline void iterate_nd_range_omp(Function f, const sycl::id<Dim> &&group_id, const sycl::range<Dim> num_groups,
                                  const sycl::range<Dim> local_size, const sycl::id<Dim> offset,
-                                 size_t num_local_mem_bytes, void* group_shared_memory_ptr,
+                                 size_t num_local_mem_bytes, void* group_shared_memory_ptr, void* sub_group_shared_memory_ptr,
                                  std::function<void()> &barrier_impl,
                                  Reducers& ... reducers) noexcept {
   if constexpr (StaticPropertyList::template has_property<
@@ -277,7 +277,7 @@ template <class StaticPropertyList, int Dim, class Function, class ...Reducers>
 [[clang::annotate("hipsycl_nd_kernel")]] __attribute__((noinline))
 inline void iterate_nd_range_omp(Function f, const sycl::id<Dim> &&group_id, const sycl::range<Dim> num_groups,
   const sycl::range<Dim> local_size, const sycl::id<Dim> offset,
-  size_t num_local_mem_bytes, void* group_shared_memory_ptr,
+  size_t num_local_mem_bytes, void* group_shared_memory_ptr, void* sub_group_shared_memory_ptr,
   std::function<void()> &barrier_impl,
   Reducers& ... reducers) noexcept {
   if constexpr (StaticPropertyList::template has_property<
@@ -287,39 +287,39 @@ inline void iterate_nd_range_omp(Function f, const sycl::id<Dim> &&group_id, con
       constexpr size_t n_local = reqd_wg_size.template get<0>();
       sycl::id<Dim> local_id{__hipsycl_local_id_x};
       sycl::nd_item<Dim> this_item{&offset,    group_id,   local_id,
-        sycl::range<Dim>{n_local}, num_groups, &barrier_impl, group_shared_memory_ptr};
+        sycl::range<Dim>{n_local}, num_groups, &barrier_impl, group_shared_memory_ptr, sub_group_shared_memory_ptr};
       f(this_item, reducers...);
     } else if constexpr (Dim == 2) {
       sycl::id<Dim> local_id{__hipsycl_local_id_x, __hipsycl_local_id_y};
       sycl::nd_item<Dim> this_item{&offset,    group_id, local_id,
                     sycl::range<Dim>{reqd_wg_size.template get<0>(),
                     reqd_wg_size.template get<1>()}, num_groups,
-        &barrier_impl, group_shared_memory_ptr};
+        &barrier_impl, group_shared_memory_ptr, sub_group_shared_memory_ptr};
       f(this_item, reducers...);
     } else if constexpr (Dim == 3) {
       sycl::id<Dim> local_id{__hipsycl_local_id_x, __hipsycl_local_id_y, __hipsycl_local_id_z};
       sycl::nd_item<Dim> this_item{&offset, group_id,
         local_id, sycl::range<Dim>{reqd_wg_size.template get<0>(), reqd_wg_size.template get<1>(), reqd_wg_size.template get<1>()},
-        num_groups, &barrier_impl, group_shared_memory_ptr};
+        num_groups, &barrier_impl, group_shared_memory_ptr, sub_group_shared_memory_ptr};
       f(this_item, reducers...);
     }
   } else {
     if constexpr (Dim == 1) {
       sycl::id<Dim> local_id{__hipsycl_local_id_x};
       sycl::nd_item<Dim> this_item{&offset,    group_id,   local_id,
-        local_size, num_groups, &barrier_impl, group_shared_memory_ptr};
+        local_size, num_groups, &barrier_impl, group_shared_memory_ptr, sub_group_shared_memory_ptr};
       f(this_item, reducers...);
     } else if constexpr (Dim == 2) {
       sycl::id<Dim> local_id{__hipsycl_local_id_x, __hipsycl_local_id_y};
       sycl::nd_item<Dim> this_item{&offset, group_id,
         local_id, local_size, num_groups,
-        &barrier_impl, group_shared_memory_ptr};
+        &barrier_impl, group_shared_memory_ptr, sub_group_shared_memory_ptr};
       f(this_item, reducers...);
     } else if constexpr (Dim == 3) {
       sycl::id<Dim> local_id{__hipsycl_local_id_x, __hipsycl_local_id_y, __hipsycl_local_id_z};
       sycl::nd_item<Dim> this_item{&offset,    group_id,
         local_id,   local_size,
-        num_groups, &barrier_impl, group_shared_memory_ptr};
+        num_groups, &barrier_impl, group_shared_memory_ptr, sub_group_shared_memory_ptr};
       f(this_item, reducers...);
     }
   }
@@ -386,6 +386,7 @@ inline void parallel_for_ndrange_kernel(
     // 128 kiB as local memory for group algorithms
     std::aligned_storage_t<128*1024, sizeof(double) * 16> group_shared_memory_ptr{};
 #ifndef HIPSYCL_HAS_FIBERS
+    std::aligned_storage_t<128*32, sizeof(double) * 16> sub_group_shared_memory_ptr{};
     std::function<void()> barrier_impl = [] () noexcept {
       assert(false && "splitting seems to have failed");
       std::terminate();
@@ -397,7 +398,7 @@ inline void parallel_for_ndrange_kernel(
       for (size_t g_x = 0; g_x < n_groups; ++g_x) {
         const sycl::id<Dim> group_id{g_x};
         iterate_nd_range_omp<StaticPropertyList>(f, std::move(group_id), num_groups, local_size, offset,
-                num_local_mem_bytes, &group_shared_memory_ptr, barrier_impl, reducers...);
+                num_local_mem_bytes, &group_shared_memory_ptr, &sub_group_shared_memory_ptr, barrier_impl, reducers...);
         }
     } else if constexpr(Dim == 2) {
 #pragma omp for collapse(2)
@@ -405,7 +406,7 @@ inline void parallel_for_ndrange_kernel(
         for (size_t g_y = 0; g_y < num_groups[1]; ++g_y) {
           const sycl::id<Dim> group_id{g_x, g_y};
           iterate_nd_range_omp<StaticPropertyList>(f, std::move(group_id), num_groups, local_size, offset,
-            num_local_mem_bytes, &group_shared_memory_ptr, barrier_impl, reducers...);
+            num_local_mem_bytes, &group_shared_memory_ptr, &sub_group_shared_memory_ptr, barrier_impl, reducers...);
         }
       }
     } else if constexpr (Dim == 3) {
@@ -415,7 +416,7 @@ inline void parallel_for_ndrange_kernel(
           for (size_t g_z = 0; g_z < num_groups[2]; ++g_z) {
             const sycl::id<Dim> group_id{g_x, g_y, g_z};
             iterate_nd_range_omp<StaticPropertyList>(f, std::move(group_id), num_groups, local_size, offset,
-              num_local_mem_bytes, &group_shared_memory_ptr, barrier_impl, reducers...);
+              num_local_mem_bytes, &group_shared_memory_ptr, &sub_group_shared_memory_ptr, barrier_impl, reducers...);
           }
         }
       }

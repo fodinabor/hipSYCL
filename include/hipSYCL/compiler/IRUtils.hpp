@@ -17,6 +17,7 @@ class AssumptionCache;
 namespace hipsycl::compiler {
 static constexpr size_t NumArrayElements = 1024;
 static constexpr size_t DefaultAlignment = 64;
+static constexpr size_t SGSize = 32;
 struct MDKind {
   static constexpr const char Arrayified[] = "hipSYCL.arrayified";
   static constexpr const char InnerLoop[] = "hipSYCL.loop.inner";
@@ -24,10 +25,12 @@ struct MDKind {
 };
 
 static constexpr const char BarrierIntrinsicName[] = "__hipsycl_barrier";
+static constexpr const char SubBarrierIntrinsicName[] = "__hipsycl_sg_barrier";
 static constexpr const char LocalIdGlobalNameX[] = "_ZN7hipsycl4glue12omp_dispatch20__hipsycl_local_id_xE";
 static constexpr const char LocalIdGlobalNameY[] = "_ZN7hipsycl4glue12omp_dispatch20__hipsycl_local_id_yE";
 static constexpr const char LocalIdGlobalNameZ[] = "_ZN7hipsycl4glue12omp_dispatch20__hipsycl_local_id_zE";
-static const std::array<const char*, 3> LocalIdGlobalNames{LocalIdGlobalNameX, LocalIdGlobalNameY, LocalIdGlobalNameZ};
+static const std::array<const char *, 3> LocalIdGlobalNames{LocalIdGlobalNameX, LocalIdGlobalNameY, LocalIdGlobalNameZ};
+static constexpr const char SgIdGlobalName[] = "_ZN7hipsycl4sycl15__hipsycl_sg_idE";
 
 class SplitterAnnotationInfo;
 
@@ -50,6 +53,14 @@ bool hasOnlyBarrier(const llvm::BasicBlock *BB, const hipsycl::compiler::Splitte
 bool startsWithBarrier(const llvm::BasicBlock *BB, const hipsycl::compiler::SplitterAnnotationInfo &SAA);
 bool endsWithBarrier(const llvm::BasicBlock *BB, const hipsycl::compiler::SplitterAnnotationInfo &SAA);
 llvm::CallInst *createBarrier(llvm::Instruction *InsertBefore, hipsycl::compiler::SplitterAnnotationInfo &SAA);
+
+bool isSubBarrier(const llvm::Instruction *I, const hipsycl::compiler::SplitterAnnotationInfo &SAA);
+bool blockHasSubBarrier(const llvm::BasicBlock *BB, const hipsycl::compiler::SplitterAnnotationInfo &SAA);
+bool hasSubBarriers(const llvm::Function &F, const hipsycl::compiler::SplitterAnnotationInfo &SAA);
+bool hasOnlySubBarrier(const llvm::BasicBlock *BB, const hipsycl::compiler::SplitterAnnotationInfo &SAA);
+bool startsWithSubBarrier(const llvm::BasicBlock *BB, const hipsycl::compiler::SplitterAnnotationInfo &SAA);
+bool endsWithSubBarrier(const llvm::BasicBlock *BB, const hipsycl::compiler::SplitterAnnotationInfo &SAA);
+llvm::CallInst *createSubBarrier(llvm::Instruction *InsertBefore, hipsycl::compiler::SplitterAnnotationInfo &SAA);
 
 bool isWorkItemLoop(const llvm::Loop &L);
 bool isInWorkItemLoop(const llvm::Loop &L);

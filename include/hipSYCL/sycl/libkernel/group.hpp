@@ -349,12 +349,17 @@ struct group
     f(sg, make_sp_item(detail::get_local_id<Dimensions>()));
     detail::local_device_barrier(access::fence_space::global_and_local);
 #else
+    std::aligned_storage_t<32, sizeof(double) * 16> sub_group_shared_memory_ptr{};
     if constexpr (Dimensions == 1) {
 #ifdef _OPENMP
  #pragma omp simd
 #endif
       for(std::size_t i = 0; i < _local_range[0]; ++i){
+        #ifdef HIPSYCL_HAS_RV
         sub_group sg;
+        #else
+        sub_group sg{get_local_range().size(), get_group_linear_range(), &sub_group_shared_memory_ptr};
+        #endif
         f(sg, make_sp_item(sycl::id<1>{i}));
       }
     }
@@ -364,7 +369,11 @@ struct group
  #pragma omp simd
 #endif
         for(std::size_t j = 0; j < _local_range[1]; ++j){
+          #ifdef HIPSYCL_HAS_RV
           sub_group sg;
+          #else
+          sub_group sg{get_local_range().size(), get_group_linear_range(), &sub_group_shared_memory_ptr};
+          #endif
           f(sg, make_sp_item(sycl::id<2>{i,j}));
         }
       }
@@ -376,7 +385,11 @@ struct group
  #pragma omp simd
 #endif
           for(std::size_t k = 0; k < _local_range[2]; ++k){
+            #ifdef HIPSYCL_HAS_RV
             sub_group sg;
+            #else
+            sub_group sg{get_local_range().size(), get_group_linear_range(), &sub_group_shared_memory_ptr};
+            #endif
             f(sg, make_sp_item(sycl::id<3>{i,j,k}));
           }
         }
@@ -505,13 +518,15 @@ struct group
         range<Dimensions> num_groups,
         host_barrier_type* group_barrier = nullptr,
         id_type local_id = {},
-        void *local_memory_ptr = nullptr)
+        void *local_memory_ptr = nullptr,
+        void *sub_group_local_memory_ptr = nullptr)
   : _group_id{group_id}, 
     _local_range{local_range}, 
     _num_groups{num_groups},
     _group_barrier{group_barrier},
     _local_id{local_id},
-    _local_memory_ptr(local_memory_ptr)
+    _local_memory_ptr(local_memory_ptr),
+    _sub_group_local_memory_ptr(sub_group_local_memory_ptr)
   {}
 
   HIPSYCL_KERNEL_TARGET
@@ -544,6 +559,13 @@ struct group
     return _local_memory_ptr;
   }
 
+  HIPSYCL_KERNEL_TARGET
+  void *get_sub_group_local_memory_ptr() const
+  {
+    return _sub_group_local_memory_ptr;
+  }
+
+
 private:
   const id<Dimensions> _group_id;
   const range<Dimensions> _local_range;
@@ -551,6 +573,7 @@ private:
   const host_barrier_type* _group_barrier;
   const id_type _local_id;
   void *_local_memory_ptr;
+  void *_sub_group_local_memory_ptr;
 public:
 #endif
 

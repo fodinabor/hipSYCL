@@ -30,10 +30,14 @@
 namespace {
 bool deleteGlobalVariable(llvm::Module *M, llvm::StringRef VarName) {
   if (auto *GV = M->getGlobalVariable(VarName)) {
-    if(GV->getNumUses() == 0) {
+    if (GV->getNumUses() == 0 || std::none_of(GV->user_begin(), GV->user_end(), [GV](llvm::User *U) { return U != GV; })) {
       HIPSYCL_DEBUG_INFO << "[RemoveBarrierCalls] Clean-up global variable " << *GV << "\n";
       GV->eraseFromParent();
       return true;
+    }
+    HIPSYCL_DEBUG_INFO << "[RemoveBarrierCalls] Global variable still in use " << VarName << "\n";
+    for (auto *U : GV->users()) {
+      HIPSYCL_DEBUG_INFO << "[RemoveBarrierCalls] >>> " << *U << "\n";
     }
   }
   return false;
@@ -48,7 +52,7 @@ bool removeBarrierCalls(llvm::Function &F, hipsycl::compiler::SplitterAnnotation
 
   for (auto &BB : F) {
     for (auto &I : BB) {
-      if (hipsycl::compiler::utils::isBarrier(&I, SAA)) {
+      if (hipsycl::compiler::utils::isBarrier(&I, SAA) || hipsycl::compiler::utils::isSubBarrier(&I, SAA)) {
         BarriersToRemove.insert(&I);
       }
     }
@@ -69,12 +73,21 @@ bool removeBarrierCalls(llvm::Function &F, hipsycl::compiler::SplitterAnnotation
                          << "\n";
     }
   }
+  if (auto *B = M->getFunction(hipsycl::compiler::SubBarrierIntrinsicName)) {
+    if (B->getNumUses() == 0) {
+      B->eraseFromParent();
+      SAA.removeSplitter(B);
+      HIPSYCL_DEBUG_INFO << "[RemoveBarrierCalls] Clean-up helper barrier: "
+                         << hipsycl::compiler::SubBarrierIntrinsicName << "\n";
+    }
+  }
 
   bool Changed = !BarriersToRemove.empty();
 
   Changed |= deleteGlobalVariable(M, hipsycl::compiler::LocalIdGlobalNameX);
   Changed |= deleteGlobalVariable(M, hipsycl::compiler::LocalIdGlobalNameY);
   Changed |= deleteGlobalVariable(M, hipsycl::compiler::LocalIdGlobalNameZ);
+  Changed |= deleteGlobalVariable(M, hipsycl::compiler::SgIdGlobalName);
 
   return Changed;
 }
