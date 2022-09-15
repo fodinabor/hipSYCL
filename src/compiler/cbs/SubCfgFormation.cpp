@@ -235,7 +235,7 @@ void createLoopsAround(llvm::Function &F, llvm::BasicBlock *AfterBB, const llvm:
     auto *LoopCond = Builder.CreateICmpULT(IncIndVar, LocalSize[D], "exit.cond." + Suffix);
     if (HI.IsSub && D == Dim - 1) {
       auto *ContCond = Builder.CreateICmpULT(ContiguousIdx, HI.OuterLocalSize.back(), "exit.cont_cond." + Suffix);
-      LoopCond = Builder.CreateLogicalAnd(ContCond, LoopCond);
+      LoopCond = Builder.CreateSelect(ContCond, LoopCond, llvm::ConstantInt::getNullValue(LoopCond->getType()));
     }
     Builder.CreateCondBr(LoopCond, Header, AfterBB);
 
@@ -687,6 +687,7 @@ void SubCFG::arrayifyMultiSubCfgValues(
           }
         if (auto *GEP = llvm::dyn_cast<llvm::GetElementPtrInst>(&I))
           if (GEP->hasMetadata(hipsycl::compiler::MDKind::Arrayified)) {
+            // fixme: in the sub path, this might be a function argument.. currently only triggers on debug though.
             InstAllocaMap.insert({&I, llvm::cast<llvm::AllocaInst>(GEP->getPointerOperand())});
             continue;
           }
@@ -1295,9 +1296,11 @@ void formSubCfgsGeneric(llvm::Function &F, llvm::LoopInfo &LI, llvm::DominatorTr
       llvm::CodeExtractorAnalysisCache CEAC{F};
       llvm::CodeExtractor CE{Blocks};
       assert(CE.isEligible());
-      auto NewF = CE.extractCodeRegion(CEAC, Inputs, Outputs);
 
       llvm::ValueToValueMapTy VMap;
+#if LLVM_VERSION_MAJOR >= 14
+      auto NewF = CE.extractCodeRegion(CEAC, Inputs, Outputs);
+
       HIPSYCL_DEBUG_INFO << "Inputs:"
                          << "\n";
       int Cnter = 0;
@@ -1311,7 +1314,24 @@ void formSubCfgsGeneric(llvm::Function &F, llvm::LoopInfo &LI, llvm::DominatorTr
         HIPSYCL_DEBUG_INFO << *O << " -> " << *NewF->getArg(Cnter) << "\n";
         VMap[O] = NewF->getArg(Cnter++);
       }
-      // llvm::MergeBlockIntoPredecessor(NewF->getEntryBlock().getSingleSuccessor());
+#else
+      // LLVM < 14 does not expose the In-/Outputs. should not really matter, since we fall back to global / undef loads
+      // anyways, in case a required value is not used as input..
+      auto NewF = CE.extractCodeRegion(CEAC);
+
+      assert(NewF->hasOneUser());
+      auto NewFCall = llvm::cast<llvm::CallBase>(NewF->user_back());
+      auto OpIt = NewFCall->arg_begin();
+      auto ArgIt = NewF->arg_begin();
+
+      HIPSYCL_DEBUG_INFO << "In-/Outputs:"
+                         << "\n";
+      for (int i = 0; i < NewFCall->arg_size(); ++i) {
+        HIPSYCL_DEBUG_INFO << **OpIt << " -> " << *ArgIt << "\n";
+        VMap[*OpIt++] = ArgIt++;
+      }
+#endif
+
       utils::createSubBarrier(NewF->getEntryBlock().getTerminator(), const_cast<SplitterAnnotationInfo &>(SAA));
       for (auto &BB : *NewF)
         if (BB.getTerminator()->getNumSuccessors() == 0)
@@ -1395,7 +1415,7 @@ void formSubCfgsGeneric(llvm::Function &F, llvm::LoopInfo &LI, llvm::DominatorTr
         assert(SGIdArg->getNumUses() == 0);
       }
 
-      assert(std::distance(NewF->user_begin(), NewF->user_end()) == 1);
+      assert(NewF->hasOneUser());
       utils::checkedInlineFunction(llvm::cast<llvm::CallBase>(NewF->user_back()), "[SubCFG]");
       llvm::SmallVector<llvm::BasicBlock *> FunBlocks;
       std::transform(F.begin(), F.end(), std::back_inserter(FunBlocks), [](llvm::BasicBlock &BB) { return &BB; });
@@ -1406,11 +1426,17 @@ void formSubCfgsGeneric(llvm::Function &F, llvm::LoopInfo &LI, llvm::DominatorTr
       llvm::remapInstructionsInBlocks(FunBlocks, GlobalVarToIdxMap);
       moveGlobalVarLoadsToEntry(F, FunBlocks, SgIdGlobalName);
 
-      // for (auto &VarName : LocalSizeGlobalNames) {
-      //   if(auto GV = F.getParent()->getGlobalVariable(VarName)) {
-      //     GV->eraseFromParent();
-      //   }
-      // }
+      for (auto &VarName : LocalSizeGlobalNames) {
+        if (auto GV = F.getParent()->getGlobalVariable(VarName)) {
+          llvm::SmallVector<llvm::LoadInst *> WL;
+          for (auto *U : GV->users())
+            if (auto LI = llvm::dyn_cast<llvm::LoadInst>(U); LI && LI->user_empty())
+              WL.push_back(LI);
+          for (auto *LI : WL)
+            LI->eraseFromParent();
+          GV->eraseFromParent();
+        }
+      }
     }
   }
 

@@ -207,10 +207,10 @@ void registerCBSPipeline(llvm::ModulePassManager &MPM, OptLevel Opt) {
   FPM.addPass(WILoopMarkerPass{});
   FPM.addPass(LoopSplitterInliningPass{});
 
-  if (Opt != OptLevel::O0) {
-    FPM.addPass(KernelFlatteningPass{});
-    FPM.addPass(SimplifyKernelPass{});
+  FPM.addPass(KernelFlatteningPass{});
+  FPM.addPass(SimplifyKernelPass{});
 
+  if (Opt != OptLevel::O0) {
     MPM.addPass(llvm::createModuleToFunctionPassAdaptor(std::move(FPM)));
     MPM.addPass(llvm::IPSCCPPass{});
     FPM.addPass(llvm::InstCombinePass{});
