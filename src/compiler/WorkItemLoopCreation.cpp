@@ -1284,11 +1284,12 @@ void WorkItemLoopCreationPassLegacy::getAnalysisUsage(llvm::AnalysisUsage &AU) c
 
 bool WorkItemLoopCreationPassLegacy::runOnFunction(llvm::Function &F) {
   auto &SAA = getAnalysis<SplitterAnnotationAnalysisLegacy>().getAnnotationInfo();
-  if (!SAA.isKernelFunc(&F) || !utils::hasBarriers(F, SAA))
-    return false;
 
   auto &DT = getAnalysis<llvm::DominatorTreeWrapperPass>().getDomTree();
   auto &LI = getAnalysis<llvm::LoopInfoWrapperPass>().getLoopInfo();
+
+  if (!SAA.isKernelFunc(&F) || !utils::hasBarriers(F, SAA) || !utils::getSingleWorkItemLoop(LI))
+    return false;
 
   auto &PDT = getAnalysis<llvm::PostDominatorTreeWrapperPass>().getPostDomTree();
   auto &VUA = getAnalysis<VariableUniformityAnalysisLegacy>().getResult();
@@ -1307,12 +1308,11 @@ llvm::PreservedAnalyses WorkItemLoopCreationPass::run(llvm::Function &F, llvm::F
   auto &MAM = AM.getResult<llvm::ModuleAnalysisManagerFunctionProxy>(F);
   auto *SAA = MAM.getCachedResult<hipsycl::compiler::SplitterAnnotationAnalysis>(*F.getParent());
 
-  if (!SAA || !SAA->isKernelFunc(&F) || !utils::hasBarriers(F, *SAA)) {
-    return llvm::PreservedAnalyses::all();
-  }
-
   auto &DT = AM.getResult<llvm::DominatorTreeAnalysis>(F);
   auto &LI = AM.getResult<llvm::LoopAnalysis>(F);
+  if (!SAA || !SAA->isKernelFunc(&F) || !utils::hasBarriers(F, *SAA) || !utils::getSingleWorkItemLoop(LI)) {
+    return llvm::PreservedAnalyses::all();
+  }
 
   auto &PDT = AM.getResult<llvm::PostDominatorTreeAnalysis>(F);
   auto &VUA = AM.getResult<VariableUniformityAnalysis>(F);

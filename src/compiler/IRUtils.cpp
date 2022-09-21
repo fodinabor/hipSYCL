@@ -587,4 +587,137 @@ void dropDebugLocation(llvm::BasicBlock *BB) {
   }
 }
 
+// if \a Type != nullptr, uses getOrInsertGlobal
+llvm::Value *getLoadForGlobalVariable(llvm::Function &F, llvm::StringRef VarName, llvm::Type *Ty) {
+  auto *GV = Ty ? F.getParent()->getOrInsertGlobal(VarName, Ty) : F.getParent()->getGlobalVariable(VarName);
+  if (GV) {
+    for (auto U : GV->users()) {
+      if (auto *LoadI = llvm::dyn_cast<llvm::LoadInst>(U)) {
+        if (LoadI->getParent()->getParent() == &F)
+          return LoadI;
+      }
+    }
+  }
+  llvm::IRBuilder Builder{F.getEntryBlock().getTerminator()};
+  const auto &DL = F.getParent()->getDataLayout();
+  if (GV) {
+    return Builder.CreateLoad(F.getParent()->getDataLayout().getLargestLegalIntType(F.getContext()), GV);
+  } else { // global var might be cleaned up already if the id aint used in this kernel..
+    return Builder.CreateLoad(
+        DL.getLargestLegalIntType(F.getContext()),
+        llvm::UndefValue::get(llvm::Type::getIntNPtrTy(F.getContext(), DL.getLargestLegalIntTypeSizeInBits())));
+  }
+}
+
+std::size_t getRangeDim(llvm::Function &F) {
+  auto FName = F.getName();
+  // todo: fix with MS mangling
+  //  llvm::Regex Rgx("7nd_itemILi([1-3])E");
+  llvm::Regex Rgx("EELi([1-3])E");
+  llvm::SmallVector<llvm::StringRef, 4> Matches;
+  if (Rgx.match(FName, &Matches))
+    return std::stoull(static_cast<std::string>(Matches[1]));
+  llvm_unreachable("[SubCFG] Could not deduce kernel dimensionality!");
+}
+
+llvm::SmallVector<llvm::Value *, 3> getLocalSizeValues(llvm::Function &F, int Dim) {
+  auto &DL = F.getParent()->getDataLayout();
+  const auto ReqdWgSize = utils::getReqdWgSize(F);
+
+  if (ReqdWgSize[0] == 0) {
+    auto *LocalSizeArg =
+        std::find_if(F.arg_begin(), F.arg_end(), [](llvm::Argument &Arg) { return Arg.getName() == "local_size"; });
+    if (LocalSizeArg == F.arg_end()) {
+      LocalSizeArg = std::find_if(F.arg_begin(), F.arg_end(),
+                                  [](llvm::Argument &Arg) { return Arg.getName() == "local_size.coerce"; });
+      if (Dim == 1) {
+        if (LocalSizeArg == F.arg_end())
+          llvm_unreachable("[SubCFG] Kernel has no local_size or local_size.coerce argument!");
+        else
+          return {LocalSizeArg};
+      } else if (Dim == 2) {
+        if (LocalSizeArg == F.arg_end()) {
+          auto *LocalSizeArgX = std::find_if(F.arg_begin(), F.arg_end(),
+                                             [](llvm::Argument &Arg) { return Arg.getName() == "local_size.coerce0"; });
+          auto *LocalSizeArgY = std::find_if(F.arg_begin(), F.arg_end(),
+                                             [](llvm::Argument &Arg) { return Arg.getName() == "local_size.coerce1"; });
+
+          if (LocalSizeArgX == F.arg_end() || LocalSizeArgY == F.arg_end())
+            llvm_unreachable("[SubCFG] Kernel has no local_size or local_size.coerce{0,1} argument!");
+          else
+            return {LocalSizeArgX, LocalSizeArgY};
+        }
+      } else if (LocalSizeArg == F.arg_end())
+        llvm_unreachable("[SubCFG] Kernel has no local_size argument!");
+    }
+
+    // local_size is just an array of size_t's..
+    auto SizeTSize = DL.getLargestLegalIntTypeSizeInBits();
+
+    llvm::IRBuilder Builder{F.getEntryBlock().getTerminator()};
+    llvm::Value *LocalSizePtr = nullptr;
+    if (!LocalSizeArg->getType()->isArrayTy())
+      LocalSizePtr = Builder.CreatePointerCast(LocalSizeArg, llvm::Type::getIntNPtrTy(F.getContext(), SizeTSize),
+                                               "local_size.cast");
+
+    llvm::SmallVector<llvm::Value *, 3> LocalSize;
+    for (unsigned int I = 0; I < Dim; ++I) {
+      if (LocalSizeArg->getType()->isArrayTy()) {
+        LocalSize.push_back(Builder.CreateExtractValue(LocalSizeArg, {I}, "local_size." + llvm::Twine{DimName[I]}));
+      } else {
+        auto *LocalSizeGep =
+            Builder.CreateInBoundsGEP(DL.getLargestLegalIntType(F.getContext()), LocalSizePtr,
+                                      {Builder.getIntN(SizeTSize, I)}, "local_size.gep." + llvm::Twine{DimName[I]});
+        LocalSize.push_back(Builder.CreateLoad(DL.getLargestLegalIntType(F.getContext()), LocalSizeGep,
+                                               "local_size." + llvm::Twine{DimName[I]}));
+      }
+    }
+    return LocalSize;
+  }
+
+  HIPSYCL_DEBUG_INFO << "[SubCFG] Kernel with constant WG size: (" << ReqdWgSize[0] << "," << ReqdWgSize[1] << ","
+                     << ReqdWgSize[2] << ")\n";
+  auto *SizeT = DL.getLargestLegalIntType(F.getContext());
+  llvm::SmallVector<llvm::Value *, 3> LocalSize;
+  for (int I = 0; I < Dim; ++I)
+    LocalSize.push_back(llvm::ConstantInt::get(SizeT, ReqdWgSize[I], false));
+  return LocalSize;
+}
+
+void moveGlobalVarLoadsToEntry(llvm::Function &F, llvm::ArrayRef<llvm::BasicBlock *> Blocks,
+                               llvm::StringRef GlobalName) {
+  llvm::SmallVector<llvm::LoadInst *, 4> LoadWL;
+  auto GV = F.getParent()->getNamedGlobal(GlobalName);
+  for (auto *BB : Blocks)
+    for (auto &I : *BB)
+      if (auto *Load = llvm::dyn_cast<llvm::LoadInst>(&I); Load && Load->getPointerOperand() == GV)
+        LoadWL.push_back(Load);
+  llvm::Value *CommonLoad = nullptr;
+  for (auto *I : LoadWL) {
+    if (!CommonLoad) {
+      CommonLoad = I;
+      if (F.getEntryBlock().size() == 1)
+        I->moveBefore(F.getEntryBlock().getFirstNonPHI());
+      else
+        I->moveAfter(F.getEntryBlock().getFirstNonPHI());
+    } else {
+      I->replaceAllUsesWith(CommonLoad);
+      I->eraseFromParent();
+    }
+  }
+}
+
+void moveAllocasToEntry(llvm::Function &F, llvm::ArrayRef<llvm::BasicBlock *> Blocks) {
+  llvm::SmallVector<llvm::AllocaInst *, 4> AllocaWL;
+  for (auto *BB : Blocks)
+    for (auto &I : *BB)
+      if (auto *AllocaInst = llvm::dyn_cast<llvm::AllocaInst>(&I))
+        AllocaWL.push_back(AllocaInst);
+  for (auto *I : AllocaWL)
+    if (F.getEntryBlock().size() == 1)
+      I->moveBefore(F.getEntryBlock().getFirstNonPHI());
+    else
+      I->moveAfter(F.getEntryBlock().getFirstNonPHI());
+}
+
 } // namespace hipsycl::compiler::utils

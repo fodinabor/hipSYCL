@@ -39,9 +39,6 @@
 
 namespace hipsycl::compiler {
 
-#define POCL_LOCAL_ID_X_GLOBAL "_local_id_x"
-#define POCL_LOCAL_ID_Y_GLOBAL "_local_id_y"
-#define POCL_LOCAL_ID_Z_GLOBAL "_local_id_z"
 class SplitterAnnotationInfo;
 
 class ParallelRegion {

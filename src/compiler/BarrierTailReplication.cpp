@@ -23,6 +23,8 @@
 // THE SOFTWARE.
 
 #include <algorithm>
+#include <iterator>
+#include <llvm/IR/BasicBlock.h>
 
 #include "hipSYCL/common/debug.hpp"
 #include "hipSYCL/compiler/BarrierTailReplication.hpp"
@@ -78,11 +80,17 @@ bool BarrierTailReplication::processFunction(llvm::Function &F) {
 
   BasicBlockSet ProcessedBbs;
 
-  WIBBs_ = hipsycl::compiler::utils::getBasicBlocksInWorkItemLoops(LI_);
-  auto *WILoop = hipsycl::compiler::utils::getSingleWorkItemLoop(LI_);
-  auto *WIEntry = hipsycl::compiler::utils::getWorkItemLoopBodyEntry(WILoop);
+  llvm::BasicBlock *Entry = nullptr;
+  if (auto *WILoop = hipsycl::compiler::utils::getSingleWorkItemLoop(LI_)) {
+    WIBBs_ = hipsycl::compiler::utils::getBasicBlocksInWorkItemLoops(LI_);
+    Entry = hipsycl::compiler::utils::getWorkItemLoopBodyEntry(WILoop);
+  } else {
+    auto WIBBS = hipsycl::compiler::utils::PtrSetWrapper{WIBBs_};
+    std::transform(F.begin(), F.end(), std::inserter(WIBBS, WIBBs_.end()), [](llvm::BasicBlock &BB) { return &BB; });
+    Entry = &F.getEntryBlock();
+  }
 
-  bool Changed = findBarriersDfs(WIEntry, ProcessedBbs);
+  bool Changed = findBarriersDfs(Entry, ProcessedBbs);
   /* The created tails might contain PHI nodes with operands
      referring to the non-predecessor (split point) BB.
      These must be cleaned to avoid breakage later on.

@@ -299,12 +299,6 @@ bool ParallelRegion::Verify() {
           std::cerr << "suspicious block: " << BB->getName().str() << std::endl;
           std::cerr << "the entry is: " << entryBB()->getName().str() << std::endl;
 
-          ParallelRegion::ParallelRegionVector PRs;
-          PRs.push_back(this);
-          std::set<llvm::BasicBlock *> Highlights;
-          Highlights.insert(entryBB());
-          Highlights.insert(BB);
-
           assert(false && "Incoming edges to non-entry block!");
           return false;
         }

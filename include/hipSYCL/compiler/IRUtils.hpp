@@ -31,6 +31,7 @@ static constexpr const char LocalIdGlobalNameY[] = "_ZN7hipsycl4glue12omp_dispat
 static constexpr const char LocalIdGlobalNameZ[] = "_ZN7hipsycl4glue12omp_dispatch20__hipsycl_local_id_zE";
 static const std::array<const char *, 3> LocalIdGlobalNames{LocalIdGlobalNameX, LocalIdGlobalNameY, LocalIdGlobalNameZ};
 static constexpr const char SgIdGlobalName[] = "_ZN7hipsycl4sycl15__hipsycl_sg_idE";
+static const std::array<char, 3> DimName{'x', 'y', 'z'};
 
 class SplitterAnnotationInfo;
 
@@ -158,6 +159,13 @@ template <class T> T *getValueOneLevel(llvm::Constant *V, unsigned idx = 0) {
     return nullptr;
   return llvm::dyn_cast<T>(V->getOperand(idx));
 }
+
+llvm::Value *getLoadForGlobalVariable(llvm::Function &F, llvm::StringRef VarName, llvm::Type *Ty = nullptr);
+void moveGlobalVarLoadsToEntry(llvm::Function &F, llvm::ArrayRef<llvm::BasicBlock *> Blocks,
+                               llvm::StringRef GlobalName);
+std::size_t getRangeDim(llvm::Function &F);
+llvm::SmallVector<llvm::Value *, 3> getLocalSizeValues(llvm::Function &F, int Dim);
+void moveAllocasToEntry(llvm::Function &F, llvm::ArrayRef<llvm::BasicBlock *> Blocks);
 
 } // namespace utils
 } // namespace hipsycl::compiler

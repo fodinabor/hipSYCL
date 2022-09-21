@@ -28,6 +28,7 @@
 #include "hipSYCL/compiler/SplitterAnnotationAnalysis.hpp"
 #include "hipSYCL/compiler/VariableUniformityAnalysis.hpp"
 
+#include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Instructions.h"
@@ -39,12 +40,12 @@
 //#define DEBUG_LOOP_BARRIERS
 
 namespace {
-bool addRequiredBarriersToLoop(llvm::Loop *L, llvm::DominatorTree &DT,
+bool addRequiredBarriersToLoop(llvm::Loop *L, bool HasWILoop, llvm::DominatorTree &DT,
                                hipsycl::compiler::SplitterAnnotationInfo &SAA) {
   if (!hipsycl::compiler::utils::hasBarriers(*L->getHeader()->getParent(), SAA))
     return false;
 
-  if (!hipsycl::compiler::utils::isInWorkItemLoop(*L))
+  if (HasWILoop && !hipsycl::compiler::utils::isInWorkItemLoop(*L))
     return false;
 
   bool isBLoop = false;
@@ -164,8 +165,11 @@ bool AddRequiredLoopBarriersPassLegacy::runOnLoop(llvm::Loop *L, llvm::LPPassMan
     return false;
 
   auto &DT = getAnalysis<llvm::DominatorTreeWrapperPass>().getDomTree();
+  auto &LI = getAnalysis<llvm::LoopInfoWrapperPass>().getLoopInfo();
 
-  return addRequiredBarriersToLoop(L, DT, SAA);
+  bool HasWILoop = utils::getSingleWorkItemLoop(LI) != nullptr;
+
+  return addRequiredBarriersToLoop(L, HasWILoop, DT, SAA);
 }
 
 llvm::PreservedAnalyses AddRequiredLoopBarriersPass::run(llvm::Loop &L, llvm::LoopAnalysisManager &AM,
@@ -179,7 +183,9 @@ llvm::PreservedAnalyses AddRequiredLoopBarriersPass::run(llvm::Loop &L, llvm::Lo
   if (!SAA || !SAA->isKernelFunc(F) || !utils::hasBarriers(*F, *SAA))
     return llvm::PreservedAnalyses::all();
 
-  if (!addRequiredBarriersToLoop(&L, AR.DT, *SAA))
+  bool HasWILoop = utils::getSingleWorkItemLoop(AR.LI) != nullptr;
+
+  if (!addRequiredBarriersToLoop(&L, HasWILoop, AR.DT, *SAA))
     return llvm::PreservedAnalyses::all();
 
   llvm::PreservedAnalyses PA = llvm::getLoopPassPreservedAnalyses();

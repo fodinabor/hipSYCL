@@ -37,6 +37,7 @@
 #include "hipSYCL/compiler/LoopSplitterInlining.hpp"
 #include "hipSYCL/compiler/LoopsParallelMarker.hpp"
 #include "hipSYCL/compiler/PHIsToAllocas.hpp"
+#include "hipSYCL/compiler/RealWorkItemLoopCreation.hpp"
 #include "hipSYCL/compiler/RemoveBarrierCalls.hpp"
 #include "hipSYCL/compiler/ReqdLoopBarriers.hpp"
 #include "hipSYCL/compiler/SimplifyKernel.hpp"
@@ -112,6 +113,7 @@ void registerPoclPipelineLegacy(llvm::legacy::PassManagerBase &PM) {
 
   PM.add(new IsolateRegionsPassLegacy{});
   PM.add(new WorkItemLoopCreationPassLegacy{});
+  PM.add(new RealWorkItemLoopCreationPassLegacy{});
   PM.add(new RemoveBarrierCallsPassLegacy{});
   PM.add(new KernelFlatteningPassLegacy{});
   PM.add(new LoopsParallelMarkerPassLegacy{});
@@ -189,6 +191,7 @@ void registerPoclPipeline(llvm::ModulePassManager &MPM, OptLevel Opt) {
 
   FPM.addPass(IsolateRegionsPass{});
   FPM.addPass(WorkItemLoopCreationPass{});
+  FPM.addPass(RealWorkItemLoopCreationPass{});
   FPM.addPass(RemoveBarrierCallsPass{});
 
   FPM.addPass(llvm::LoopSimplifyPass{});

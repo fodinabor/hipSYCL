@@ -141,10 +141,12 @@ bool isolateRegions(const hipsycl::compiler::SplitterAnnotationInfo &SAA, const 
   llvm::SmallVector<llvm::Region *, 8> WorkList{RI.getTopLevelRegion()};
   bool Changed = false;
 
+  bool HasWILoop = utils::getSingleWorkItemLoop(LI) != nullptr;
+
   do {
     llvm::SmallVector<llvm::Region *, 8> CurrentRegions;
     for (auto *R : WorkList) {
-      if (utils::isInWorkItemLoop(*R, LI))
+      if (!HasWILoop || utils::isInWorkItemLoop(*R, LI))
         Changed |= isolateRegion(R, SAA);
       std::transform(R->begin(), R->end(), std::back_inserter(CurrentRegions), [](auto &UR) { return UR.get(); });
     }

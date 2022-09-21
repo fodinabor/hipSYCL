@@ -29,6 +29,7 @@ add_library(hipSYCL_clang SHARED
   RemoveBarrierCalls.cpp
   CanonicalizeBarriers.cpp
   WorkItemLoopCreation.cpp
+  RealWorkItemLoopCreation.cpp
   ParallelRegion.cpp
   SimplifyKernel.cpp
   LoopSimplify.cpp
