@@ -26,14 +26,18 @@
 #include "hipSYCL/compiler/IRUtils.hpp"
 #include "hipSYCL/compiler/SplitterAnnotationAnalysis.hpp"
 #include "hipSYCL/compiler/VariableUniformityAnalysis.hpp"
+#include <llvm/ADT/SmallVector.h>
 #include <llvm/IR/Instructions.h>
 
 namespace {
 bool deleteGlobalVariable(llvm::Module *M, llvm::StringRef VarName) {
   if (auto *GV = M->getGlobalVariable(VarName)) {
+    llvm::SmallVector<llvm::Instruction *> WL;
     for (auto U : GV->users())
       if (auto LI = llvm::dyn_cast<llvm::LoadInst>(U); LI && LI->user_empty())
-        LI->eraseFromParent();
+        WL.push_back(LI);
+    for (auto *LI : WL)
+      LI->eraseFromParent();
 
     if (GV->getNumUses() == 0 ||
         std::none_of(GV->user_begin(), GV->user_end(), [GV](llvm::User *U) { return U != GV; })) {

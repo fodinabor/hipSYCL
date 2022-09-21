@@ -251,9 +251,12 @@ void createLoopsAround(llvm::Function &F, llvm::BasicBlock *AfterBB, const llvm:
     IndVars[D]->replaceIncomingBlockWith(&F.getEntryBlock(), IndVars[D - 1]->getParent());
   }
 
-  auto *MDWorkItemLoop = llvm::MDNode::get(F.getContext(), {llvm::MDString::get(F.getContext(), MDKind::WorkItemLoop)});
-  auto *LoopID = llvm::makePostTransformationMetadata(F.getContext(), nullptr, {}, {MDWorkItemLoop});
-  Latches[Dim - 1]->getTerminator()->setMetadata("llvm.loop", LoopID);
+  if (!HI.HasSub || HI.IsSub) {
+    auto *MDWorkItemLoop =
+        llvm::MDNode::get(F.getContext(), {llvm::MDString::get(F.getContext(), MDKind::WorkItemLoop)});
+    auto *LoopID = llvm::makePostTransformationMetadata(F.getContext(), nullptr, {}, {MDWorkItemLoop});
+    Latches[Dim - 1]->getTerminator()->setMetadata("llvm.loop", LoopID);
+  }
   VMap[AfterBB] = Latches[Dim - 1];
 
   Builder.SetInsertPoint(IndVars[Dim - 1]->getParent(), ++IndVars[Dim - 1]->getIterator());
@@ -1417,6 +1420,8 @@ void formSubCfgsGeneric(llvm::Function &F, llvm::LoopInfo &LI, llvm::DominatorTr
 
       assert(NewF->hasOneUser());
       utils::checkedInlineFunction(llvm::cast<llvm::CallBase>(NewF->user_back()), "[SubCFG]");
+      assert(NewF->user_empty());
+      NewF->eraseFromParent();
       llvm::SmallVector<llvm::BasicBlock *> FunBlocks;
       std::transform(F.begin(), F.end(), std::back_inserter(FunBlocks), [](llvm::BasicBlock &BB) { return &BB; });
 
@@ -1434,6 +1439,7 @@ void formSubCfgsGeneric(llvm::Function &F, llvm::LoopInfo &LI, llvm::DominatorTr
               WL.push_back(LI);
           for (auto *LI : WL)
             LI->eraseFromParent();
+          assert(GV->user_empty());
           GV->eraseFromParent();
         }
       }
@@ -1537,10 +1543,6 @@ void createLoopsAroundKernel(llvm::Function &F, llvm::DominatorTree &DT, llvm::L
   auto *LastHeader = Body;
 
   createLoopsAround(F, ExitBB, LocalSize, 0, {false, false, {}, {}, Idx}, VMap, Latches, LastHeader, Idx);
-
-  Blocks.clear();
-  Blocks.reserve(std::distance(F.begin(), F.end()));
-  std::transform(F.begin(), F.end(), std::back_inserter(Blocks), [](auto &BB) { return &BB; });
 
   F.getEntryBlock().getTerminator()->setSuccessor(0, LastHeader);
   llvm::remapInstructionsInBlocks(Blocks, VMap);

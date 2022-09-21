@@ -73,7 +73,7 @@ bool inlineCallsInBasicBlock(llvm::BasicBlock &BB, const llvm::SmallPtrSet<llvm:
                                      "which does not support this!\n";
             }
 
-            HIPSYCL_DEBUG_INFO << "[LoopSplitterInlining] Replace barrier with intrinsic: "
+            HIPSYCL_DEBUG_INFO << "[LoopSplitterInlining] Replace sub barrier with intrinsic: "
                                << CallI->getCalledFunction()->getName() << "\n";
             hipsycl::compiler::utils::createSubBarrier(CallI, SAA);
             CallI->eraseFromParent();

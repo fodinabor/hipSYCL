@@ -186,6 +186,8 @@ HIPSYCL_KERNEL_TARGET T group_reduce(Group g, T x, BinaryOperation binary_op,
     if (lid < warpSize)
       x = group_reduce(sg, scratch[lid], binary_op);
 
+    group_barrier(g);
+    
     if (lid == 0)
       scratch[0] = x;
 
@@ -523,6 +525,9 @@ T group_broadcast(sub_group g, T x,
   return detail::extract_impl(x, local_linear_id);
 #elif defined(HIPSYCL_HAS_CPU_SG)
   T *scratch = static_cast<T *>(g.get_local_memory_ptr());
+
+  // the loop should then be optimizable to just running this id..
+  group_barrier(g);
   const size_t lid = g.get_local_linear_id();
 
   if (lid == local_linear_id) {
