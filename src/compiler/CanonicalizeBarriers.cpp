@@ -33,6 +33,7 @@
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 
 #include <iostream>
+#include <llvm/ADT/ArrayRef.h>
 
 namespace {
 using namespace hipsycl::compiler;
@@ -92,9 +93,9 @@ bool canonicalizeExitBarriers(llvm::Function &F, llvm::BasicBlock *WILatch, llvm
  * @param SAA The SplitterAnnotationInfo
  * @return \b true if changed, \b false else.
  */
-bool reAadBarrierAtInnerLatches(const llvm::Loop *WILoop, hipsycl::compiler::SplitterAnnotationInfo &SAA) {
+bool reAadBarrierAtInnerLatches(llvm::ArrayRef<llvm::Loop*> Loops, hipsycl::compiler::SplitterAnnotationInfo &SAA) {
   bool Changed;
-  for (auto *L : WILoop->getSubLoops()) {
+  for (auto *L : Loops) {
     llvm::SmallVector<llvm::BasicBlock *, 4> Latches;
     L->getLoopLatches(Latches);
     for (auto *Latch : Latches) {
@@ -191,9 +192,10 @@ bool canonicalizeBarriers(llvm::Function &F, llvm::LoopInfo &LI, llvm::Dominator
 
     WILatch = simplifyLatch(WILoop, WILatch, LI, DT);
 
-    Changed |= reAadBarrierAtInnerLatches(WILoop, SAA);
+    Changed |= reAadBarrierAtInnerLatches(WILoop->getSubLoops(), SAA);
+  } else {
+    Changed |= reAadBarrierAtInnerLatches(LI.getLoopsInPreorder(), SAA);
   }
-
   Changed |= canonicalizeEntry(Entry, SAA);
   Changed |= canonicalizeExitBarriers(F, WILatch, LI, SAA);
 
@@ -279,7 +281,7 @@ void CanonicalizeBarriersPassLegacy::getAnalysisUsage(llvm::AnalysisUsage &AU) c
 
 bool CanonicalizeBarriersPassLegacy::runOnFunction(llvm::Function &F) {
   auto &SAA = getAnalysis<SplitterAnnotationAnalysisLegacy>().getAnnotationInfo();
-  if (!SAA.isKernelFunc(&F) || !(utils::hasBarriers(F, SAA) || utils::hasSubBarriers(F, SAA)))
+  if (!SAA.isKernelFunc(&F)) //|| !(utils::hasBarriers(F, SAA) || utils::hasSubBarriers(F, SAA)))
     return false;
   auto &LI = getAnalysis<llvm::LoopInfoWrapperPass>().getLoopInfo();
   auto &DT = getAnalysis<llvm::DominatorTreeWrapperPass>().getDomTree();
@@ -289,7 +291,7 @@ bool CanonicalizeBarriersPassLegacy::runOnFunction(llvm::Function &F) {
 llvm::PreservedAnalyses CanonicalizeBarriersPass::run(llvm::Function &F, llvm::FunctionAnalysisManager &AM) {
   auto &MAM = AM.getResult<llvm::ModuleAnalysisManagerFunctionProxy>(F);
   auto *SAA = MAM.getCachedResult<hipsycl::compiler::SplitterAnnotationAnalysis>(*F.getParent());
-  if (!SAA || !SAA->isKernelFunc(&F) || !(utils::hasBarriers(F, *SAA) || utils::hasSubBarriers(F, *SAA)))
+  if (!SAA || !SAA->isKernelFunc(&F)) // || !(utils::hasBarriers(F, *SAA) || utils::hasSubBarriers(F, *SAA)))
     return llvm::PreservedAnalyses::all();
 
   auto &LI = AM.getResult<llvm::LoopAnalysis>(F);

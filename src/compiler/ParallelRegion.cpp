@@ -25,6 +25,7 @@
 
 #include "hipSYCL/compiler/ParallelRegion.hpp"
 
+#include "hipSYCL/common/debug.hpp"
 #include "hipSYCL/compiler/IRUtils.hpp"
 #include "hipSYCL/compiler/SplitterAnnotationAnalysis.hpp"
 
@@ -298,7 +299,7 @@ bool ParallelRegion::Verify() {
           dumpNames();
           std::cerr << "suspicious block: " << BB->getName().str() << std::endl;
           std::cerr << "the entry is: " << entryBB()->getName().str() << std::endl;
-
+          HIPSYCL_DEBUG_EXECUTE_VERBOSE(BB->getParent()->viewCFG();)
           assert(false && "Incoming edges to non-entry block!");
           return false;
         }

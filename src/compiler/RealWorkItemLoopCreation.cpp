@@ -21,48 +21,42 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
-#include "hipSYCL/compiler/SplitterAnnotationAnalysis.hpp"
 #include <iostream>
-#include <llvm/ADT/SmallVector.h>
-#include <llvm/Transforms/Utils/Cloning.h>
-#include <llvm/Transforms/Utils/ValueMapper.h>
 #include <map>
 #include <sstream>
 #include <vector>
 
-#include "llvm/ADT/Statistic.h"
-#include "llvm/Analysis/LoopInfo.h"
-#include "llvm/Analysis/PostDominators.h"
-#include "llvm/IR/DIBuilder.h"
-#include "llvm/IR/DataLayout.h"
-#include "llvm/IR/DebugInfoMetadata.h"
-#include "llvm/IR/IRBuilder.h"
-#include "llvm/IR/Instructions.h"
-#include "llvm/IR/IntrinsicInst.h"
-#include "llvm/IR/MDBuilder.h"
-#include "llvm/IR/Module.h"
-#include "llvm/IR/ValueSymbolTable.h"
-#include "llvm/Support/CommandLine.h"
-#include "llvm/Transforms/Utils/BasicBlockUtils.h"
+#include <llvm/ADT/SmallVector.h>
+#include <llvm/ADT/Statistic.h>
+#include <llvm/Analysis/LoopInfo.h>
+#include <llvm/Analysis/PostDominators.h>
+#include <llvm/IR/Constants.h>
+#include <llvm/IR/DIBuilder.h>
+#include <llvm/IR/DataLayout.h>
+#include <llvm/IR/DebugInfoMetadata.h>
+#include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/Instructions.h>
+#include <llvm/IR/IntrinsicInst.h>
+#include <llvm/IR/MDBuilder.h>
+#include <llvm/IR/Module.h>
+#include <llvm/IR/ValueSymbolTable.h>
+#include <llvm/Support/CommandLine.h>
+#include <llvm/Transforms/Utils/BasicBlockUtils.h>
+#include <llvm/Transforms/Utils/Cloning.h>
+#include <llvm/Transforms/Utils/ValueMapper.h>
 
 #define DEBUG_TYPE "workitem-loops"
 
+#include "hipSYCL/common/debug.hpp"
 #include "hipSYCL/compiler/IRUtils.hpp"
 #include "hipSYCL/compiler/ParallelRegion.hpp"
 #include "hipSYCL/compiler/RealWorkItemLoopCreation.hpp"
-// #include "Barrier.h"
-// #include "Kernel.h"
-// #include "Workgroup.h"
-// #include "WorkitemHandlerChooser.h"
-// #include "WorkitemLoops.h"
-
-//#define DUMP_CFGS
-
-// #include "DebugHelpers.h"
-#define DEBUG_PR_CREATION
-//#define DEBUG_WORK_ITEM_LOOPS
-
+#include "hipSYCL/compiler/SplitterAnnotationAnalysis.hpp"
 #include "hipSYCL/compiler/VariableUniformityAnalysis.hpp"
+
+// #define DEBUG_PR_CREATION
+// #define DEBUG_WORK_ITEM_LOOPS
+// #define DEBUG_REFERENCE_FIXING
 
 #define CONTEXT_ARRAY_ALIGN 64
 
@@ -133,7 +127,7 @@ private:
   // An alloca in the kernel which stores the first iteration to execute
   // in the inner (dimension 0) loop. This is set to 1 in an peeled iteration
   // to skip the 0, 0, 0 iteration in the loops.
-//   llvm::Value *LocalIdXFirstVar;
+  //   llvm::Value *LocalIdXFirstVar;
   void removeOriginalWILoop();
 
   llvm::Value *LocalIdXGlobal;
@@ -387,7 +381,6 @@ ParallelRegion::ParallelRegionVector *WorkitemLoops::getParallelRegions(llvm::Fu
 #endif
   return parallel_regions;
 }
-// ParallelRegion &Region, llvm::BasicBlock *EntryBb, llvm::BasicBlock *ExitBb, bool PeeledFirst
 
 std::pair<llvm::BasicBlock *, llvm::BasicBlock *>
 WorkitemLoops::createLoopAround(ParallelRegion &region, llvm::BasicBlock *entryBB, llvm::BasicBlock *exitBB,
@@ -511,12 +504,14 @@ WorkitemLoops::createLoopAround(ParallelRegion &region, llvm::BasicBlock *entryB
   exitBB->getTerminator()->replaceUsesOfWith(oldExit, forCondBB);
 
   //   if (addIncBlock) {
-  AppendIncBlock(exitBB, IndVar);
+  // AppendIncBlock(exitBB, IndVar);
   //   }
-
   builder.SetInsertPoint(forCondBB);
 
-  llvm::Value *cmpResult = builder.CreateICmpULT(IndVar, DynamicLocalSize);
+  auto Inced = builder.CreateAdd(IndVar, ConstantInt::get(SizeT, 1));
+  IndVar->addIncoming(Inced, forCondBB);
+
+  llvm::Value *cmpResult = builder.CreateICmpULT(Inced, DynamicLocalSize);
 
   Instruction *loopBranch = builder.CreateCondBr(cmpResult, loopBodyEntryBB, loopEndBB);
 
@@ -533,8 +528,9 @@ WorkitemLoops::createLoopAround(ParallelRegion &region, llvm::BasicBlock *entryB
 #else
   MDNode *AccessGroupMD = MDNode::getDistinct(C, {});
   MDNode *ParallelAccessMD = MDNode::get(C, {MDString::get(C, "llvm.loop.parallel_accesses"), AccessGroupMD});
+  auto *MDWorkItemLoop = llvm::MDNode::get(C, {llvm::MDString::get(C, MDKind::WorkItemLoop)});
+  MDNode *Root = MDNode::get(C, {Dummy, ParallelAccessMD, MDWorkItemLoop});
 
-  MDNode *Root = MDNode::get(C, {Dummy, ParallelAccessMD});
 #endif
 
   // At this point we have
@@ -593,22 +589,40 @@ void WorkitemLoops::releaseParallelRegions() {
   }
 }
 
+void purgeLifetime(ParallelRegion &region) {
+  llvm::SmallVector<llvm::Instruction *, 8> ToDelete;
+  for (auto *BB : region)
+    for (auto &I : *BB)
+      if (auto *CI = llvm::dyn_cast<llvm::CallInst>(&I))
+        if (CI->getCalledFunction())
+          if (CI->getCalledFunction()->getIntrinsicID() == llvm::Intrinsic::lifetime_start ||
+              CI->getCalledFunction()->getIntrinsicID() == llvm::Intrinsic::lifetime_end)
+            ToDelete.push_back(CI);
+
+  for (auto *I : ToDelete)
+    I->eraseFromParent();
+
+  //  // remove dead bitcasts
+  //  for (auto *BB : Cfg.getNewBlocks())
+  //    llvm::SimplifyInstructionsInBlock(BB);
+}
+
 bool WorkitemLoops::processFunction(Function &F) {
   //   Kernel *K = cast<Kernel>(&F);
 
   llvm::Module *M = F.getParent();
 
-  auto Dim = utils::getRangeDim(F);
-  LocalSize = utils::getLocalSizeValues(F, Dim);
-
   releaseParallelRegions();
 
   OriginalParallelRegions = getParallelRegions(F);
+
+  auto Dim = utils::getRangeDim(F);
+  LocalSize = utils::getLocalSizeValues(F, Dim);
   {
     llvm::SmallVector<llvm::BasicBlock *> Blocks;
     Blocks.reserve(std::distance(F.begin(), F.end()));
     std::transform(F.begin(), F.end(), std::back_inserter(Blocks), [](auto &BB) { return &BB; });
-    utils::moveAllocasToEntry(F, Blocks);
+    // utils::moveAllocasToEntry(F, Blocks);
     utils::moveGlobalVarLoadsToEntry(F, Blocks, LocalIdGlobalNameX);
     utils::moveGlobalVarLoadsToEntry(F, Blocks, LocalIdGlobalNameY);
     utils::moveGlobalVarLoadsToEntry(F, Blocks, LocalIdGlobalNameZ);
@@ -656,6 +670,8 @@ bool WorkitemLoops::processFunction(Function &F) {
     std::cerr << "### Adding context save/restore for PR: ";
     region->dumpNames();
 #endif
+    purgeLifetime(*region);
+
     fixMultiRegionVariables(region);
     entryCounts[region->entryBB()]++;
   }
@@ -705,12 +721,8 @@ bool WorkitemLoops::processFunction(Function &F) {
       ParallelRegion *replica = original->replicate(reference_map, ".peeled_wi");
       replica->chainAfter(original);
       replica->purge();
-      llvm::ValueToValueMapTy VMap;
-      for (int I = 0; I < Dim; ++I)
-        VMap[utils::getLoadForGlobalVariable(F, LocalIdGlobalNames[I])] = ConstantInt::get(SizeT, 0);
 
-      llvm::SmallVector<llvm::BasicBlock *> Blocks{replica->begin(), replica->end()};
-      llvm::remapInstructionsInBlocks(Blocks, VMap);
+      original = replica;
 
       l = std::make_pair(replica->entryBB(), replica->exitBB());
     } else {
@@ -729,18 +741,19 @@ bool WorkitemLoops::processFunction(Function &F) {
 
     llvm::SmallVector<llvm::BasicBlock *> Blocks{original->begin(), original->end()};
 
-    l = createLoopAround(*original, l.first, l.second, peelFirst,
-                         utils::getLoadForGlobalVariable(F, LocalIdGlobalNameX), !unrolled, LocalSize[0]);
+    if (Dim > 2) {
+      l = createLoopAround(*original, l.first, l.second, Dim == 3 && peelFirst,
+                           utils::getLoadForGlobalVariable(F, LocalIdGlobalNameZ), !unrolled, LocalSize[2]);
+    }
 
     if (Dim > 1) {
-      l = createLoopAround(*original, l.first, l.second, false, utils::getLoadForGlobalVariable(F, LocalIdGlobalNameY),
-                           !unrolled, LocalSize[1]);
+      l = createLoopAround(*original, l.first, l.second, Dim == 2 && peelFirst,
+                           utils::getLoadForGlobalVariable(F, LocalIdGlobalNameY), !unrolled, LocalSize[1]);
     }
 
-    if (Dim > 2) {
-      l = createLoopAround(*original, l.first, l.second, false, utils::getLoadForGlobalVariable(F, LocalIdGlobalNameZ),
-                           !unrolled, LocalSize[2]);
-    }
+    l = createLoopAround(*original, l.first, l.second, Dim == 1 && peelFirst,
+                         utils::getLoadForGlobalVariable(F, LocalIdGlobalNameX), !unrolled, LocalSize[0]);
+
     /* Loop edges coming from another region mean B-loops which means
        we have to fix the loop edge to jump to the beginning of the wi-loop
        structure, not its body. This has to be done only for non-peeled
@@ -752,22 +765,30 @@ bool WorkitemLoops::processFunction(Function &F) {
         bb->getTerminator()->replaceUsesOfWith(original->entryBB(), l.first);
       }
     }
+    HIPSYCL_DEBUG_EXECUTE_VERBOSE(F.viewCFG();)
   }
 
   // for the peeled regions we need to add a prologue
   // that initializes the local ids and the first iteration
   // counter
-  //   for (ParallelRegion::ParallelRegionVector::iterator i = OriginalParallelRegions->begin(),
-  //                                                       e = OriginalParallelRegions->end();
-  //        i != e; ++i) {
-  //     ParallelRegion *pr = (*i);
+  for (ParallelRegion::ParallelRegionVector::iterator i = OriginalParallelRegions->begin(),
+                                                      e = OriginalParallelRegions->end();
+       i != e; ++i) {
+    ParallelRegion *pr = (*i);
 
-  //     if (!peeledRegion[pr])
-  //       continue;
-  //     insertLocalIdInit(pr->entryBB(), 0, 0, 0);
-  //     builder.SetInsertPoint(&*(pr->entryBB()->getFirstInsertionPt()));
-  //     // builder.CreateStore(ConstantInt::get(SizeT, 1), LocalIdXFirstVar);
-  //   }
+    if (!peeledRegion[pr])
+      continue;
+    llvm::ValueToValueMapTy VMap;
+    for (int I = 0; I < Dim; ++I)
+      VMap[utils::getLoadForGlobalVariable(F, LocalIdGlobalNames[I])] = ConstantInt::get(SizeT, 0);
+
+    llvm::SmallVector<llvm::BasicBlock *> Blocks{pr->begin(), pr->end()};
+    llvm::remapInstructionsInBlocks(Blocks, VMap);
+
+    // insertLocalIdInit(pr->entryBB(), 0, 0, 0);
+    // builder.SetInsertPoint(&*(pr->entryBB()->getFirstInsertionPt()));
+    // builder.CreateStore(ConstantInt::get(SizeT, 1), LocalIdXFirstVar);
+  }
 
   //   insertLocalIdInit(&F.getEntryBlock(), 0, 0, 0);
 
@@ -831,26 +852,31 @@ void WorkitemLoops::fixMultiRegionVariables(ParallelRegion *region) {
   }
 
   /* Finally, fix the instructions. */
-  for (InstructionVec::iterator i = instructionsToFix.begin(); i != instructionsToFix.end(); ++i) {
+  for (auto *I : instructionsToFix) {
 #ifdef DEBUG_WORK_ITEM_LOOPS
     std::cerr << "### adding context/save restore for" << std::endl;
-    (*i)->dump();
+    HIPSYCL_DEBUG_INFO << *I;
 #endif
-    llvm::Instruction *instructionToFix = *i;
-    addContextSaveRestore(instructionToFix);
+    addContextSaveRestore(I);
   }
 }
 
 llvm::Value *WorkitemLoops::getLinearWiIndex(llvm::IRBuilder<> &builder, llvm::Module *M, ParallelRegion *region) {
   auto *F = region->entryBB()->getParent();
 
+  if (auto Idx = region->GetContiguousIdx())
+    return Idx;
+
+  llvm::IRBuilder Builder{region->entryBB()->getFirstNonPHI()};
+
   auto Idx = utils::getLoadForGlobalVariable(*F, LocalIdGlobalNames[0]);
   for (size_t D = 1; D < LocalSize.size(); ++D) {
     const std::string Suffix = (llvm::Twine{DimName[D]}).str();
 
-    Idx = builder.CreateMul(Idx, LocalSize[D], "idx.mul." + Suffix, true);
-    Idx = builder.CreateAdd(utils::getLoadForGlobalVariable(*F, LocalIdGlobalNames[D]), Idx, "idx.add." + Suffix, true);
+    Idx = Builder.CreateMul(Idx, LocalSize[D], "idx.mul." + Suffix, true);
+    Idx = Builder.CreateAdd(utils::getLoadForGlobalVariable(*F, LocalIdGlobalNames[D]), Idx, "idx.add." + Suffix, true);
   }
+  region->SetContiguousIdx(Idx);
   return Idx;
 }
 
@@ -993,10 +1019,10 @@ llvm::Instruction *WorkitemLoops::getContextArray(llvm::Instruction *instruction
 
 #ifdef DEBUG_WORK_ITEM_LOOPS
   if (DebugVal && DebugCall) {
-    std::cerr << "### DI INTRIN: \n";
-    DebugCall->dump();
-    std::cerr << "### DI VALUE:  \n";
-    DebugVal->dump();
+    llvm::errs() << "### DI INTRIN: \n";
+    llvm::errs() << *DebugCall;
+    llvm::errs() << "### DI VALUE:  \n";
+    llvm::errs() << *DebugVal;
   }
 #endif
 
@@ -1065,11 +1091,11 @@ llvm::Instruction *WorkitemLoops::getContextArray(llvm::Instruction *instruction
   }
 
   llvm::AllocaInst *Alloca = nullptr;
-  Value *NumberOfWorkItems = LocalSize[0];
-  for (int I = 1; I < LocalSize.size(); ++I)
-    NumberOfWorkItems = builder.CreateBinOp(Instruction::Mul, NumberOfWorkItems, LocalSize[I], "num_wi");
+  // Value *NumberOfWorkItems = LocalSize[0];
+  // for (int I = 1; I < LocalSize.size(); ++I)
+  //   NumberOfWorkItems = builder.CreateBinOp(Instruction::Mul, NumberOfWorkItems, LocalSize[I], "num_wi");
 
-  Alloca = builder.CreateAlloca(AllocType, NumberOfWorkItems, varName);
+  Alloca = builder.CreateAlloca(AllocType, llvm::ConstantInt::get(SizeT, 1024), varName);
 
   /* Align the context arrays to stack to enable wide vectors
      accesses to them. Also, LLVM 3.3 seems to produce illegal
@@ -1169,10 +1195,8 @@ void WorkitemLoops::addContextSaveRestore(llvm::Instruction *instruction) {
       assert("Cannot add context restore for a PHI node at the region entry!" &&
              regionOfBlock(phi->getParent())->entryBB() != phi->getParent());
 #ifdef DEBUG_WORK_ITEM_LOOPS
-      std::cerr << "### adding context restore code before PHI" << std::endl;
-      user->dump();
-      std::cerr << "### in BB:" << std::endl;
-      user->getParent()->dump();
+      HIPSYCL_DEBUG_INFO << "### adding context restore code before PHI\n" << *user << "\n";
+      HIPSYCL_DEBUG_INFO << "### in BB:\n" << *user->getParent() << "\n";
 #endif
       BasicBlock *incomingBB = NULL;
       for (unsigned incoming = 0; incoming < phi->getNumIncomingValues(); ++incoming) {
@@ -1189,13 +1213,15 @@ void WorkitemLoops::addContextSaveRestore(llvm::Instruction *instruction) {
     user->replaceUsesOfWith(instruction, loadedValue);
 
 #ifdef DEBUG_WORK_ITEM_LOOPS
-    std::cerr << "### done, the user was converted to:" << std::endl;
-    user->dump();
+    HIPSYCL_DEBUG_INFO << "### done, the user was converted to:\n" << *user << "\n";
 #endif
   }
 }
 
 bool WorkitemLoops::shouldNotBeContextSaved(llvm::Instruction *instr) {
+#ifdef DEBUG_WORK_ITEM_LOOPS
+  HIPSYCL_DEBUG_INFO << "### should context save " << *instr << "?\n";
+#endif
   /*
     _local_id loads should not be replicated as it leads to
     problems in conditional branch case where the header node
@@ -1227,12 +1253,13 @@ bool WorkitemLoops::shouldNotBeContextSaved(llvm::Instruction *instr) {
   */
   if (!VUA.shouldBePrivatized(instr->getParent()->getParent(), instr)) {
 #ifdef DEBUG_WORK_ITEM_LOOPS
-    std::cerr << "### based on VUA, not context saving:";
-    instr->dump();
+    HIPSYCL_DEBUG_INFO << "### based on VUA, not context saving: " << *instr << "\n";
 #endif
     return true;
   }
-
+#ifdef DEBUG_WORK_ITEM_LOOPS
+  HIPSYCL_DEBUG_INFO << "### indeed context saving: " << *instr << "\n";
+#endif
   return false;
 }
 
@@ -1411,7 +1438,7 @@ bool RealWorkItemLoopCreationPassLegacy::runOnFunction(llvm::Function &F) {
   auto &SAA = getAnalysis<SplitterAnnotationAnalysisLegacy>().getAnnotationInfo();
   auto &DT = getAnalysis<llvm::DominatorTreeWrapperPass>().getDomTree();
   auto &LI = getAnalysis<llvm::LoopInfoWrapperPass>().getLoopInfo();
-  if (!SAA.isKernelFunc(&F) || !utils::hasBarriers(F, SAA) || utils::getSingleWorkItemLoop(LI))
+  if (!SAA.isKernelFunc(&F) || utils::getSingleWorkItemLoop(LI))
     return false;
 
   auto &PDT = getAnalysis<llvm::PostDominatorTreeWrapperPass>().getPostDomTree();
@@ -1433,7 +1460,7 @@ llvm::PreservedAnalyses RealWorkItemLoopCreationPass::run(llvm::Function &F, llv
 
   auto &DT = AM.getResult<llvm::DominatorTreeAnalysis>(F);
   auto &LI = AM.getResult<llvm::LoopAnalysis>(F);
-  if (!SAA || !SAA->isKernelFunc(&F) || !utils::hasBarriers(F, *SAA) || utils::getSingleWorkItemLoop(LI)) {
+  if (!SAA || !SAA->isKernelFunc(&F) || utils::getSingleWorkItemLoop(LI)) {
     return llvm::PreservedAnalyses::all();
   }
 

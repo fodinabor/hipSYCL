@@ -123,8 +123,9 @@ private:
   ParallelRegion *createParallelRegionBefore(llvm::BasicBlock *B);
 
   llvm::Instruction *addContextSave(llvm::Instruction *I, llvm::Instruction *Alloca);
-  llvm::Instruction *addContextRestore(llvm::Value *Val, llvm::Instruction *Alloca, bool PoclWrapperStructAdded,
-                                       llvm::Instruction *Before = NULL, bool IsAlloca = false);
+  llvm::Instruction *addContextRestore(llvm::Value *Val, llvm::Instruction *Alloca, llvm::Type *InstType,
+                                       bool PoclWrapperStructAdded, llvm::Instruction *Before = NULL,
+                                       bool IsAlloca = false);
   llvm::Instruction *getContextArray(llvm::Instruction *Instruction, bool &PoclWrapperStructAdded);
 
   std::pair<llvm::BasicBlock *, llvm::BasicBlock *> createLoopAround(ParallelRegion &Region, llvm::BasicBlock *EntryBb,
@@ -785,43 +786,84 @@ llvm::Instruction *WorkItemLoopCreator::addContextSave(llvm::Instruction *I, llv
   return Builder.CreateStore(I, Builder.CreateGEP(I->getType(), Alloca, GepArgs));
 }
 
-llvm::Instruction *WorkItemLoopCreator::addContextRestore(llvm::Value *Val, llvm::Instruction *Alloca,
-                                                          bool PoclWrapperStructAdded, llvm::Instruction *Before,
-                                                          bool IsAlloca) {
-  assert(Val != NULL);
-  assert(Alloca != NULL);
-  llvm::IRBuilder<> Builder(Alloca);
-  if (Before != NULL) {
-    Builder.SetInsertPoint(Before);
-  } else if (llvm::isa<llvm::Instruction>(Val)) {
-    Builder.SetInsertPoint(llvm::dyn_cast<llvm::Instruction>(Val));
-    Before = llvm::dyn_cast<llvm::Instruction>(Val);
+// llvm::Instruction *WorkItemLoopCreator::addContextRestore(llvm::Value *Val, llvm::Instruction *Alloca,
+//                                                           bool PoclWrapperStructAdded, llvm::Instruction *Before,
+//                                                           bool IsAlloca) {
+//   assert(Val != NULL);
+//   assert(Alloca != NULL);
+//   llvm::IRBuilder<> Builder(Alloca);
+//   if (Before != NULL) {
+//     Builder.SetInsertPoint(Before);
+//   } else if (llvm::isa<llvm::Instruction>(Val)) {
+//     Builder.SetInsertPoint(llvm::dyn_cast<llvm::Instruction>(Val));
+//     Before = llvm::dyn_cast<llvm::Instruction>(Val);
+//   } else {
+//     assert(false && "Unknown context restore location!");
+//   }
+
+//   std::vector<llvm::Value *> GepArgs;
+
+//   /* Reuse the id loads earlier in the region, if possible, to
+//      avoid messy output with lots of redundant loads. */
+//   ParallelRegion *Region = regionOfBlock(Before->getParent());
+//   assert("Adding context save outside any region produces illegal code." && Region != NULL);
+
+//   assert(WorkItemLoop->getCanonicalInductionVariable());
+//   GepArgs.push_back(WorkItemLoop->getCanonicalInductionVariable());
+
+//   if (PoclWrapperStructAdded)
+//     GepArgs.push_back(llvm::ConstantInt::get(llvm::Type::getInt32Ty(Alloca->getContext()), 0));
+//   assert(Alloca && GepArgs.size() && "beeeeeeep");
+
+//   llvm::Instruction *GEP = llvm::dyn_cast<llvm::Instruction>(Builder.CreateGEP(Val->getType(), Alloca, GepArgs));
+//   if (IsAlloca) {
+//     /* In case the context saved instruction was an alloca, we created a
+//        context array with pointed-to elements, and now want to return a
+//        pointer to the elements to emulate the original alloca. */
+//     return GEP;
+//   }
+//   return Builder.CreateLoad(Val->getType(), GEP);
+// }
+
+llvm::Instruction *WorkItemLoopCreator::addContextRestore(llvm::Value *val, llvm::Instruction *alloca,
+                                                          llvm::Type *InstType, bool PoclWrapperStructAdded,
+                                                          llvm::Instruction *before, bool isAlloca) {
+  assert(val != NULL);
+  assert(alloca != NULL);
+  llvm::IRBuilder<> builder(alloca);
+  if (before != NULL) {
+    builder.SetInsertPoint(before);
+  } else if (llvm::isa<llvm::Instruction>(val)) {
+    builder.SetInsertPoint(llvm::dyn_cast<llvm::Instruction>(val));
+    before = llvm::dyn_cast<llvm::Instruction>(val);
   } else {
     assert(false && "Unknown context restore location!");
   }
 
-  std::vector<llvm::Value *> GepArgs;
+  std::vector<llvm::Value *> gepArgs;
 
   /* Reuse the id loads earlier in the region, if possible, to
      avoid messy output with lots of redundant loads. */
-  ParallelRegion *Region = regionOfBlock(Before->getParent());
-  assert("Adding context save outside any region produces illegal code." && Region != NULL);
+  ParallelRegion *region = regionOfBlock(before->getParent());
+  assert("Adding context save outside any region produces illegal code." && region != NULL);
+
+  llvm::Module *M = alloca->getParent()->getParent()->getParent();
 
   assert(WorkItemLoop->getCanonicalInductionVariable());
-  GepArgs.push_back(WorkItemLoop->getCanonicalInductionVariable());
+  gepArgs.push_back(WorkItemLoop->getCanonicalInductionVariable());
 
   if (PoclWrapperStructAdded)
-    GepArgs.push_back(llvm::ConstantInt::get(llvm::Type::getInt32Ty(Alloca->getContext()), 0));
-  assert(Alloca && GepArgs.size() && "beeeeeeep");
+    gepArgs.push_back(llvm::ConstantInt::get(llvm::Type::getInt32Ty(alloca->getContext()), 0));
 
-  llvm::Instruction *GEP = llvm::dyn_cast<llvm::Instruction>(Builder.CreateGEP(Val->getType(), Alloca, GepArgs));
-  if (IsAlloca) {
+  llvm::Instruction *gep =
+      llvm::dyn_cast<llvm::Instruction>(builder.CreateGEP(alloca->getType()->getPointerElementType(), alloca, gepArgs));
+  if (isAlloca) {
     /* In case the context saved instruction was an alloca, we created a
        context array with pointed-to elements, and now want to return a
        pointer to the elements to emulate the original alloca. */
-    return GEP;
+    return gep;
   }
-  return Builder.CreateLoad(Val->getType(), GEP);
+  return builder.CreateLoad(InstType, gep);
 }
 
 /**
@@ -1053,7 +1095,7 @@ void WorkItemLoopCreator::addContextSaveRestore(llvm::Instruction *I) {
       ContextRestoreLocation = IncomingBb->getTerminator();
     }
     llvm::Value *LoadedValue =
-        addContextRestore(User, Alloca, PoclWrapperStructAdded, ContextRestoreLocation, llvm::isa<llvm::AllocaInst>(I));
+        addContextRestore(User, Alloca, I->getType(), PoclWrapperStructAdded, ContextRestoreLocation, llvm::isa<llvm::AllocaInst>(I));
     User->replaceUsesOfWith(I, LoadedValue);
 
 #ifdef DEBUG_WORK_ITEM_LOOPS

@@ -99,11 +99,14 @@ public:
   bool HasBlock(llvm::BasicBlock *BB);
 
   static ParallelRegion *Create(const llvm::SmallPtrSet<llvm::BasicBlock *, 8> &BBs, llvm::BasicBlock *Entry,
-                                llvm::BasicBlock *exit, const SplitterAnnotationInfo& SAA);
+                                llvm::BasicBlock *exit, const SplitterAnnotationInfo &SAA);
 
   static void GenerateTempNames(llvm::BasicBlock *bb);
 
   int GetID() const { return pRegionId; }
+
+  llvm::Value *GetContiguousIdx() const { return ContiguousIdx; }
+  void SetContiguousIdx(llvm::Value *ContIdx) { ContiguousIdx = ContIdx; }
 
 private:
   BBContainer BBs_;
@@ -111,6 +114,7 @@ private:
   llvm::Instruction *LocalIDXLoadInstr;
   llvm::Instruction *LocalIDYLoadInstr;
   llvm::Instruction *LocalIDZLoadInstr;
+  llvm::Value *ContiguousIdx = nullptr;
 
   bool Verify();
   /// The indices of entry and exit, not pointers, for finding the BBs in the
@@ -121,7 +125,7 @@ private:
   /// Identifier for the parallel region.
   int pRegionId;
   static int idGen;
-  const SplitterAnnotationInfo& SAA;
+  const SplitterAnnotationInfo &SAA;
 };
 
 } // namespace hipsycl::compiler
