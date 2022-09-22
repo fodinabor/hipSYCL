@@ -72,7 +72,7 @@ jobs:
           mkdir build && cd build
           echo ${CXXFLAGS}
           
-          cmake -DCMAKE_CXX_COMPILER=/usr/bin/clang++-${{matrix.clang_version}} -DCMAKE_CXX_FLAGS="${CXXFLAGS}" -DOMP_CXX_FLAGS="$OMP_CXX_FLAGS -fopenmp" -DCLANG_EXECUTABLE_PATH=/usr/bin/clang++-${{matrix.clang_version}} -DLLVM_DIR=/usr/lib/llvm-${{matrix.clang_version}}/cmake -DCMAKE_INSTALL_PREFIX=`pwd`/install ..
+          cmake -DCMAKE_CXX_COMPILER=/usr/bin/clang++-${{matrix.clang_version}} -DCMAKE_CXX_FLAGS="${CXXFLAGS}" -DOMP_CXX_FLAGS="$OMP_CXX_FLAGS -fopenmp" -DCLANG_EXECUTABLE_PATH=/usr/bin/clang++-${{matrix.clang_version}} -DLLVM_DIR=/usr/lib/llvm-${{matrix.clang_version}}/cmake -DCMAKE_INSTALL_PREFIX=`pwd`/install -DBUILD_CLANG_PLUGIN=ON ..
           make -j2 install
       - name: setup CPU tests with loop splitting
         run: |
