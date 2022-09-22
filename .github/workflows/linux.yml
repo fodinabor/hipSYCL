@@ -38,7 +38,7 @@ jobs:
           wget -q -O cuda.sh https://developer.download.nvidia.com/compute/cuda/10.2/Prod/local_installers/cuda_10.2.89_440.33.01_linux.run
           sudo sh ./cuda.sh --override --silent --toolkit --no-man-page --no-drm --no-opengl-libs --installpath=/opt/hipSYCL/cuda
       - name: install CUDA 11.0
-        if: matrix.cuda == 11.0
+        if: matrix.cuda == 11.0 && false 
         run: |
           mkdir -p /opt/hipSYCL/cuda
           wget -q -O cuda.sh http://developer.download.nvidia.com/compute/cuda/11.0.2/local_installers/cuda_11.0.2_450.51.05_linux.run

@@ -50,6 +50,7 @@
 #include <llvm/ADT/StringRef.h>
 #include <llvm/IR/IRPrintingPasses.h>
 #include <llvm/IR/LegacyPassManager.h>
+#include <llvm/Support/CommandLine.h>
 #include <llvm/Transforms/IPO/SCCP.h>
 #include <llvm/Transforms/InstCombine/InstCombine.h>
 #include <llvm/Transforms/Scalar/SROA.h>
