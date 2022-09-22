@@ -154,6 +154,7 @@ char AddRequiredLoopBarriersPassLegacy::ID = 0;
 
 void AddRequiredLoopBarriersPassLegacy::getAnalysisUsage(llvm::AnalysisUsage &AU) const {
   AU.addRequired<llvm::DominatorTreeWrapperPass>();
+  AU.addRequired<llvm::LoopInfoWrapperPass>();
   AU.addRequired<SplitterAnnotationAnalysisLegacy>();
   AU.addPreserved<SplitterAnnotationAnalysisLegacy>();
   AU.addPreserved<VariableUniformityAnalysisLegacy>();

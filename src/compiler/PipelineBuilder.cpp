@@ -71,6 +71,10 @@ FunctionPass *createCFGSimplificationPass(unsigned Threshold = 1, bool ForwardSw
 } // namespace llvm
 
 namespace hipsycl::compiler {
+
+static llvm::cl::opt<bool> SimplifyPOCL{"simplify-pocl", llvm::cl::init(false),
+                                        llvm::cl::desc{"Run IPSCCP, SROA and friend with POCL before splitting"}};
+
 LoopSplittingPipeline selectPipeline() {
   // for debugging purposes, it's useful to have the output flushed immediately
   llvm::outs().SetUnbuffered();
@@ -173,18 +177,19 @@ void registerPoclPipeline(llvm::ModulePassManager &MPM, OptLevel Opt) {
 
   FPM.addPass(KernelFlatteningPass{});
 
-//   if (Opt != OptLevel::O0) {
-//     MPM.addPass(llvm::createModuleToFunctionPassAdaptor(std::move(FPM)));
-//     MPM.addPass(llvm::IPSCCPPass{});
-//     FPM.addPass(llvm::InstCombinePass{});
-// #if LLVM_VERSION_MAJOR <= 13
-//     FPM.addPass(llvm::SROA{});
-// #else
-//     FPM.addPass(llvm::SROAPass{});
-// #endif
+  if (SimplifyPOCL && Opt != OptLevel::O0) {
+    FPM.addPass(SimplifyKernelPass{});
+    MPM.addPass(llvm::createModuleToFunctionPassAdaptor(std::move(FPM)));
+    MPM.addPass(llvm::IPSCCPPass{});
+    FPM.addPass(llvm::InstCombinePass{});
+#if LLVM_VERSION_MAJOR <= 13
+    FPM.addPass(llvm::SROA{});
+#else
+    FPM.addPass(llvm::SROAPass{});
+#endif
 
-//     FPM.addPass(llvm::SimplifyCFGPass{});
-//   }
+    FPM.addPass(llvm::SimplifyCFGPass{});
+  }
 
   FPM.addPass(SimplifyKernelPass{});
   FPM.addPass(PHIsToAllocasPass{});
