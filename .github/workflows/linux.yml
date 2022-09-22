@@ -57,7 +57,7 @@ jobs:
             export CXXFLAGS="$CXXFLAGS -DHIPSYCL_NO_PHIS_IN_SPLIT"
           fi
           if [[ "${{matrix.clang_version}}" != "11" ]]; then
-          if [[ "${{matrix.splitter_pipeline}}" == "cbs" || "${{matrix.splitter_pipeline}}" == "cbs-manual-loops" ]]; then
+          if [[ "${{matrix.splitter_pipeline}}" != "pocl" ]]; then
             export OMP_CXX_FLAGS="$CXXFLAGS $OMP_CXX_FLAGS -fexperimental-new-pass-manager -fpass-plugin=/home/runner/work/hipSYCL/hipSYCL/build/install/lib/libhipSYCL_clang.so"
           else
             export OMP_CXX_FLAGS="$CXXFLAGS $OMP_CXX_FLAGS -fno-experimental-new-pass-manager"
