@@ -29,6 +29,7 @@
 #define HIPSYCL_OPENMP_KERNEL_LAUNCHER_HPP
 
 #include <cassert>
+#include <cstdlib>
 #include <tuple>
 #include <omp.h>
 
@@ -95,6 +96,34 @@ void reducible_parallel_invocation(Function kernel,
       std::make_tuple(host::sequential_reducer{max_threads, reductions}...);
 
 #pragma omp parallel shared(sequential_reducers)
+  {
+    auto make_omp_reducers = [&](auto &... seq_reducers) {
+      return std::make_tuple(omp_reducer{seq_reducers}...);
+    };
+    auto omp_reducers = std::apply(make_omp_reducers, sequential_reducers);
+
+    auto make_sycl_reducers = [&](auto &... omp_reds) {
+      return std::make_tuple(sycl::reducer{omp_reds}...);
+    };
+    auto sycl_reducers = std::apply(make_sycl_reducers, omp_reducers);
+
+    std::apply(kernel, sycl_reducers);
+  }
+
+  auto finalize_all = [&](auto &... seq_reducers) {
+    (finalize_reduction(seq_reducers), ...);
+  };
+  std::apply(finalize_all, sequential_reducers);
+}
+
+template <class Function, typename... Reductions>
+void reducible_parallel_invocation(Function kernel, size_t n_threads,
+                                   Reductions... reductions) noexcept {
+  
+  auto sequential_reducers =
+      std::make_tuple(host::sequential_reducer{n_threads, reductions}...);
+
+#pragma omp parallel shared(sequential_reducers) num_threads(n_threads)
   {
     auto make_omp_reducers = [&](auto &... seq_reducers) {
       return std::make_tuple(omp_reducer{seq_reducers}...);
@@ -375,7 +404,98 @@ inline void parallel_for_ndrange_kernel(
     size_t num_local_mem_bytes, Reductions... reductions) noexcept
 {
   static_assert(Dim > 0 && Dim <= 3, "Only dimensions 1 - 3 are supported.");
+#ifdef HIPSYCL_NAIVE_OMP
 
+  sycl::detail::host_local_memory::request_from_threadprivate_pool(
+      num_local_mem_bytes, num_groups.size());
+
+  // 128 kiB as local memory for group algorithms
+  // std::aligned_storage_t<128*1024, sizeof(double) * 16> group_shared_memory_ptr{};
+  void *group_shared_memory_ptr = std::aligned_alloc(sizeof(double)*16,sizeof(double)*16*1024*num_groups.size());
+  reducible_parallel_invocation([&, f](auto& ... reducers){
+    if(num_groups.size() == 0 || local_size.size() == 0)
+      return;
+
+    std::function<void()> barrier_impl = [] () {
+      #pragma omp barrier
+    };
+
+    if constexpr(Dim == 1) {
+      const size_t n_local = local_size[0];
+      const size_t n_groups = num_groups[0];
+      #pragma omp for
+      for (size_t l_x = 0; l_x < n_local; ++l_x) {
+        sycl::id<Dim> local_id{l_x};
+#pragma omp simd
+        for (size_t g_x = 0; g_x < n_groups; ++g_x) {
+          const sycl::id<Dim> group_id{g_x};
+          sycl::detail::host_local_memory::set_group_id(g_x);
+          sycl::nd_item<Dim> this_item{&offset,
+                                       group_id,
+                                       local_id,
+                                       local_size,
+                                       num_groups,
+                                       &barrier_impl,
+                                       (char*)group_shared_memory_ptr + (g_x * sizeof(double)*16*1024)};
+          f(this_item, reducers...);
+          barrier_impl();
+        }
+      }
+    } else if constexpr(Dim == 2) {
+#pragma omp for collapse(2)
+      for (size_t l_x = 0; l_x < local_size[0]; ++l_x) {
+        for (size_t l_y = 0; l_y < local_size[1]; ++l_y) {
+          sycl::id<Dim> local_id{l_x, l_y};
+          for (size_t g_x = 0; g_x < num_groups[0]; ++g_x) {
+            #pragma omp simd
+            for (size_t g_y = 0; g_y < num_groups[1]; ++g_y) {
+              const sycl::id<Dim> group_id{g_x, g_y};
+              sycl::detail::host_local_memory::set_group_id(g_x*num_groups[1] + g_y);
+              sycl::nd_item<Dim> this_item{&offset,
+                                           group_id,
+                                           local_id,
+                                           local_size,
+                                           num_groups,
+                                           &barrier_impl,
+                                           (char*)group_shared_memory_ptr + (g_x*num_groups[1] + g_y) * sizeof(double)*16*1024};
+              f(this_item, reducers...);
+              barrier_impl();
+            }
+          }
+        }
+      }
+    } else if constexpr (Dim == 3) {
+#pragma omp for collapse(3)
+      for (size_t l_x = 0; l_x < local_size[0]; ++l_x) {
+        for (size_t l_y = 0; l_y < local_size[1]; ++l_y) {
+          for (size_t l_z = 0; l_z < local_size[2]; ++l_z) {
+            sycl::id<Dim> local_id{l_x, l_y, l_z};
+            for (size_t g_x = 0; g_x < num_groups[0]; ++g_x) {
+              for (size_t g_y = 0; g_y < num_groups[1]; ++g_y) {
+                #pragma omp simd
+                for (size_t g_z = 0; g_z < num_groups[2]; ++g_z) {
+                  const sycl::id<Dim> group_id{g_x, g_y, g_z};
+                  sycl::detail::host_local_memory::set_group_id((g_x*num_groups[1] + g_y)*num_groups[2] + g_z);
+                  sycl::nd_item<Dim> this_item{&offset,
+                                               group_id,
+                                               local_id,
+                                               local_size,
+                                               num_groups,
+                                               &barrier_impl,
+                                               (char*)group_shared_memory_ptr + ((g_x*num_groups[1] + g_y)*num_groups[2] + g_z) * sizeof(double)*16*1024};
+                  f(this_item, reducers...);
+                  barrier_impl();
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+  }, local_size.size(), reductions...);
+  sycl::detail::host_local_memory::release();
+#else
   reducible_parallel_invocation([&, f](auto& ... reducers){
     if(num_groups.size() == 0 || local_size.size() == 0)
       return;
@@ -452,6 +572,7 @@ inline void parallel_for_ndrange_kernel(
     sycl::detail::host_local_memory::release();
 
   }, reductions...);
+#endif
 }
 
 template <int Dim, class Function, typename... Reductions>

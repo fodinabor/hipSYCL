@@ -111,6 +111,73 @@ enum class host_local_memory_origin { hipcpu, custom_threadprivate };
 ///    For case 1), request/release pair must be called inside the kernel function, to
 ///    guarantee that the hipCPU block execution context which provides local memory exists.
 ///    For case 2), the request/release pair must be called inside the #pragma omp parallel block.
+#ifdef HIPSYCL_NAIVE_OMP
+class host_local_memory
+{
+public:
+  static void request_from_threadprivate_pool(size_t num_bytes, size_t num_groups = 1)
+  {
+    alloc_threadprivate(num_bytes, num_groups);
+  }
+
+  static void release()
+  {
+    release_memory();
+  }
+
+  static void set_group_id(size_t group) {
+    _group_id = group;
+  }
+
+  static char* get_ptr()
+  {
+    return _local_mem + (_group_id * _num_bytes);
+  }
+
+private:
+
+  static void release_memory() {
+    if (_local_mem != nullptr && _local_mem != &(_static_local_mem[0]) &&
+        _origin != host_local_memory_origin::hipcpu)
+      delete[] _local_mem;
+
+    _local_mem = nullptr;
+  }
+  
+  static void alloc_threadprivate(size_t num_bytes, size_t num_groups) {
+    release_memory();
+
+    _origin = host_local_memory_origin::custom_threadprivate;
+    
+    _num_bytes = num_bytes;
+
+    if(num_bytes * num_groups <= _max_static_local_mem_size)
+      _local_mem = &(_static_local_mem[0]);
+    else
+    {
+      if(num_bytes > 0)
+        _local_mem = new char [num_bytes * num_groups];
+    }
+  }
+
+
+  // By default we offer 32KB local memory per work group,
+  // for more local memory we go to the heap.
+  static constexpr size_t _max_static_local_mem_size = 1024*32;
+  inline static char* _local_mem;
+  inline static size_t _group_id;
+  inline static size_t _num_bytes;
+  
+  alignas(sizeof(double) * 16) inline static char _static_local_mem
+      [_max_static_local_mem_size];
+  
+  inline static host_local_memory_origin _origin;
+// #pragma omp threadprivate(_local_mem)
+// #pragma omp threadprivate(_static_local_mem)
+// #pragma omp threadprivate(_origin)
+  #pragma omp threadprivate(_group_id)
+};
+#else
 class host_local_memory
 {
 public:
@@ -167,6 +234,7 @@ private:
 #pragma omp threadprivate(_static_local_mem)
 #pragma omp threadprivate(_origin)
 };
+#endif
 
 HIPSYCL_KERNEL_TARGET
 inline void* hiplike_dynamic_local_memory() {
