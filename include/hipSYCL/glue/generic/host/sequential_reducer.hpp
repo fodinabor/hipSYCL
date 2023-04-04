@@ -28,8 +28,9 @@
 #ifndef HIPSYCL_GLUE_HOST_SEQUENTIAL_REDUCER_HPP
 #define HIPSYCL_GLUE_HOST_SEQUENTIAL_REDUCER_HPP
 
+#include <algorithm>
 #include <new>
-#include <vector>
+#include <memory>
 
 #include "hipSYCL/sycl/libkernel/backend.hpp"
 #include "hipSYCL/sycl/libkernel/reduction.hpp"
@@ -60,35 +61,49 @@ public:
   using value_type = typename ReductionDescriptor::value_type;
   using combiner_type = typename ReductionDescriptor::combiner_type;
 
-  sequential_reducer(int num_threads, ReductionDescriptor &desc)
-      : _desc{desc},
-        _per_thread_results(num_threads,
-                            cache_line_aligned<value_type>{identity()}) {}
+  sequential_reducer(int num_threads, size_t wg_size, ReductionDescriptor &desc)
+      : _desc{desc}
+      , _num_threads{num_threads}
+      , _wg_size{wg_size}
+      , _per_thread_results{std::make_unique<
+            std::unique_ptr<cache_line_aligned<value_type>[]>[]>(num_threads)} {
+    for (int t = 0; t < num_threads; ++t) {
+      _per_thread_results[t] =
+          std::make_unique<cache_line_aligned<value_type>[]>(wg_size);
+      std::fill_n(_per_thread_results[t].get(), wg_size,
+                  cache_line_aligned<value_type>{identity()});
+    }
+  }
 
   value_type identity() const { return _desc.identity; }
 
-  void combine(int my_thread_id, const value_type& v) {
-    assert(my_thread_id < _per_thread_results.size());
-    _per_thread_results[my_thread_id].value =
-        _desc.combiner(_per_thread_results[my_thread_id].value, v);
+  void combine(int my_thread_id, size_t wi_id, const value_type& v) {
+    assert(my_thread_id < _num_threads);
+    _per_thread_results[my_thread_id][wi_id].value =
+        _desc.combiner(_per_thread_results[my_thread_id][wi_id].value, v);
   }
 
   // This should be executed in a single threaded scope.
   // Sums up all the partial results and stores in the result data buffer
   void finalize_result() {
-    for (std::size_t i = 1; i < _per_thread_results.size(); ++i) {
-      _per_thread_results[0].value = _desc.combiner(
-          _per_thread_results[0].value, _per_thread_results[i].value);
+    for (std::size_t t = 0; t < _num_threads; ++t) {
+      for (std::size_t w = 0; w < _wg_size; ++w){
+        if(t != 0 || w != 0)
+          _per_thread_results[0][0].value = _desc.combiner(
+              _per_thread_results[0][0].value, _per_thread_results[t][w].value);
+      }
     }
     
-    *(_desc.get_pointer()) = _per_thread_results[0].value;
+    *(_desc.get_pointer()) = _per_thread_results[0][0].value;
   }
 private:
   ReductionDescriptor &_desc;
+  int _num_threads;
+  size_t _wg_size;
   // TODO: new does not necessarily respect over-aligned alignas requirements.
   // Depending on the value of std::max_align_t and cache_line_size,
   // alignment may be off and not match cache lines.
-  std::vector<cache_line_aligned<value_type>> _per_thread_results;
+  std::unique_ptr<std::unique_ptr<cache_line_aligned<value_type>[]>[]> _per_thread_results;
 
 };
 

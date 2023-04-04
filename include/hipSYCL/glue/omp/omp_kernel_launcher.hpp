@@ -91,8 +91,8 @@ inline int get_num_threads() {
 
 template <class ReductionDescriptor> class omp_reducer {
 public:
-  omp_reducer(host::sequential_reducer<ReductionDescriptor>& seq_reducer)
-      : _seq_reducer{seq_reducer}, _my_thread_id{get_my_thread_id()} {}
+  omp_reducer(host::sequential_reducer<ReductionDescriptor>& seq_reducer, size_t wi_id)
+      : _seq_reducer{seq_reducer}, _my_thread_id{get_my_thread_id()}, _wi_id{wi_id} {}
 
   using value_type =
       typename host::sequential_reducer<ReductionDescriptor>::value_type;
@@ -101,12 +101,13 @@ public:
 
   value_type identity() const { return _seq_reducer.identity(); }
   void combine(const value_type &v) {
-    _seq_reducer.combine(_my_thread_id, v);
+    _seq_reducer.combine(_my_thread_id, _wi_id, v);
   }
 
 private:
   host::sequential_reducer<ReductionDescriptor>& _seq_reducer;
   int _my_thread_id;
+  size_t _wi_id;
 };
 
 template <class SequentialReducer>
@@ -115,27 +116,17 @@ void finalize_reduction(SequentialReducer &reducer) {
 }
 
 template <class Function, typename... Reductions>
-void reducible_parallel_invocation(Function kernel,
+void reducible_parallel_invocation(Function kernel, size_t wg_size,
                                    Reductions... reductions) noexcept {
   int max_threads = get_max_num_threads();
 
   auto sequential_reducers =
-      std::make_tuple(host::sequential_reducer{max_threads, reductions}...);
+      std::make_tuple(host::sequential_reducer{max_threads, wg_size, reductions}...);
 #ifdef _OPENMP
 #pragma omp parallel shared(sequential_reducers)
 #endif
   {
-    auto make_omp_reducers = [&](auto &... seq_reducers) {
-      return std::make_tuple(omp_reducer{seq_reducers}...);
-    };
-    auto omp_reducers = std::apply(make_omp_reducers, sequential_reducers);
-
-    auto make_sycl_reducers = [&](auto &... omp_reds) {
-      return std::make_tuple(sycl::reducer{omp_reds}...);
-    };
-    auto sycl_reducers = std::apply(make_sycl_reducers, omp_reducers);
-
-    std::apply(kernel, sycl_reducers);
+    std::apply(kernel, sequential_reducers);
   }
 
   auto finalize_all = [&](auto &... seq_reducers) {
@@ -143,6 +134,43 @@ void reducible_parallel_invocation(Function kernel,
   };
   std::apply(finalize_all, sequential_reducers);
 }
+
+template <int Dim, bool Offset>
+size_t get_reducer_local_id(sycl::item<Dim,Offset> item) {
+  return 0;
+}
+
+template <int Dim>
+size_t get_reducer_local_id(sycl::nd_item<Dim> item) {
+  return item.get_local_linear_id();
+}
+
+template <typename properties>
+size_t get_reducer_local_id(sycl::detail::sp_group<properties> group) {
+  return 0;
+}
+
+template <int Dim>
+size_t get_reducer_local_id(sycl::group<Dim> group) {
+  return 0;
+}
+
+template <class Function, class ItemType, typename... Reducers>
+void reducible_work_item_invocation(Function kernel, ItemType work_item_id,
+                                    Reducers&... sequential_reducers) noexcept {
+    auto omp_reducers = std::make_tuple(omp_reducer{sequential_reducers, get_reducer_local_id(work_item_id)}...);
+
+    auto make_sycl_reducers = [&](auto &... omp_reds) {
+      return std::make_tuple(sycl::reducer{omp_reds}...);
+    };
+    auto sycl_reducers = std::apply(make_sycl_reducers, omp_reducers);
+
+    auto invoke_kernel = [&](auto &...reducers) {
+      kernel(work_item_id, reducers...);
+    };
+    std::apply(invoke_kernel, sycl_reducers);
+}
+
 
 template <int Dim, class Function>
 void iterate_range_omp_for(sycl::range<Dim> r, Function f) noexcept {
@@ -231,24 +259,24 @@ inline void iterate_nd_range_omp(Function f, const sycl::id<Dim> &&group_id, con
   HIPSYCL_LOOP_SPLIT_ND_KERNEL_LOCAL_SIZE_ARG const sycl::range<Dim> local_size, const sycl::id<Dim> offset,
   size_t num_local_mem_bytes, void* group_shared_memory_ptr,
   std::function<void()> &barrier_impl,
-  Reducers& ... reducers) noexcept {
+  Reducers& ... sequential_reducers) noexcept {
   if constexpr (Dim == 1) {
     sycl::id<Dim> local_id{__hipsycl_local_id_x};
     sycl::nd_item<Dim> this_item{&offset,    group_id,   local_id,
       local_size, num_groups, &barrier_impl, group_shared_memory_ptr};
-    f(this_item, reducers...);
+    reducible_work_item_invocation(f, this_item, sequential_reducers...);
   } else if constexpr (Dim == 2) {
     sycl::id<Dim> local_id{__hipsycl_local_id_x, __hipsycl_local_id_y};
     sycl::nd_item<Dim> this_item{&offset, group_id,
       local_id, local_size, num_groups,
       &barrier_impl, group_shared_memory_ptr};
-    f(this_item, reducers...);
+    reducible_work_item_invocation(f, this_item, sequential_reducers...);
   } else if constexpr (Dim == 3) {
     sycl::id<Dim> local_id{__hipsycl_local_id_x, __hipsycl_local_id_y, __hipsycl_local_id_z};
     sycl::nd_item<Dim> this_item{&offset,    group_id,
       local_id,   local_size,
       num_groups, &barrier_impl, group_shared_memory_ptr};
-    f(this_item, reducers...);
+    reducible_work_item_invocation(f, this_item, sequential_reducers...);
   }
 }
 #endif
@@ -267,14 +295,14 @@ inline void parallel_for_kernel(Function f,
 {
   static_assert(Dim > 0 && Dim <= 3, "Only dimensions 1,2,3 are supported");
 
-  reducible_parallel_invocation([&, f](auto& ... reducers){
+  reducible_parallel_invocation([&, f](auto& ... sequential_reducers){
     iterate_range_omp_for(execution_range, [&](sycl::id<Dim> idx) {
       auto this_item =
         sycl::detail::make_item<Dim>(idx, execution_range);
 
-      f(this_item, reducers...);
+      reducible_work_item_invocation(f, this_item, sequential_reducers...);
     });
-  }, reductions...);
+  }, 1, reductions...);
 }
 
 template <int Dim, class Function, typename... Reductions>
@@ -284,14 +312,14 @@ inline void parallel_for_kernel_offset(Function f,
                                        Reductions... reductions) noexcept {
   static_assert(Dim > 0 && Dim <= 3, "Only dimensions 1,2,3 are supported");
 
-  reducible_parallel_invocation([&, f](auto& ... reducers){
+  reducible_parallel_invocation([&, f](auto& ... sequential_reducers){
     iterate_range_omp_for(offset, execution_range, [&](sycl::id<Dim> idx) {
       auto this_item =
         sycl::detail::make_item<Dim>(idx, execution_range, offset);
 
-      f(this_item, reducers...);
+      reducible_work_item_invocation(f, this_item, sequential_reducers...);
     });
-  }, reductions...);
+  }, 1, reductions...);
 }
 
 template <int Dim, class Function, typename... Reductions>
@@ -302,7 +330,7 @@ inline void parallel_for_ndrange_kernel(
 {
   static_assert(Dim > 0 && Dim <= 3, "Only dimensions 1 - 3 are supported.");
 
-  reducible_parallel_invocation([&, f](auto& ... reducers){
+  reducible_parallel_invocation([&, f](auto& ... sequential_reducers){
     if(num_groups.size() == 0 || local_size.size() == 0)
       return;
 
@@ -319,7 +347,7 @@ inline void parallel_for_ndrange_kernel(
 
     iterate_range_omp_for(num_groups, [&](sycl::id<Dim> &&group_id) {
       iterate_nd_range_omp(f, std::move(group_id), num_groups, local_size, offset,
-        num_local_mem_bytes, &group_shared_memory_ptr, barrier_impl, reducers...);
+        num_local_mem_bytes, &group_shared_memory_ptr, barrier_impl, sequential_reducers...);
     });
 #elif defined(HIPSYCL_HAS_FIBERS)
     host::static_range_decomposition<Dim> group_decomposition{
@@ -344,13 +372,13 @@ inline void parallel_for_ndrange_kernel(
                                     &barrier_impl,
                                     &group_shared_memory_ptr};
 
-      f(this_item, reducers...);
+      reducible_work_item_invocation(f, this_item, sequential_reducers...);
     });
 #endif
 
     sycl::detail::host_local_memory::release();
 
-  }, reductions...);
+  }, local_size.size(), reductions...);
 }
 
 template <int Dim, class Function, typename... Reductions>
@@ -371,12 +399,11 @@ inline void parallel_for_workgroup(Function f,
         iterate_range_omp_for(num_groups, [&, f](sycl::id<Dim> group_id) {
           sycl::group<Dim> this_group{group_id, local_size, num_groups};
 
-          f(this_group, reducers...);
+          reducible_work_item_invocation(f, this_group, reducers...);
         });
 
         sycl::detail::host_local_memory::release();
-      },
-      reductions...);
+      }, 1, reductions...);
 }
 
 template <class HierarchicalDecomposition,
@@ -406,14 +433,12 @@ inline void parallel_region(Function f,
               sycl::detail::host_sp_property_descriptor<group_properties>>
               this_group{
                   sycl::group<dimensions>{group_id, group_size, num_groups}};
-
-          f(this_group, reducers...);
+          reducible_work_item_invocation(f, this_group, reducers...);
         });
 
         sycl::detail::host_local_memory::release();
         
-      },
-      reductions...);
+      }, 1, reductions...);
 }
 
 template<int Dim, int MaxGuaranteedWorkgroupSize>
