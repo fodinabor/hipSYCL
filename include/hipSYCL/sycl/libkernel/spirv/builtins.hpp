@@ -359,6 +359,11 @@ HIPSYCL_BUILTIN T __hipsycl_clamp(T x, T minval, T maxval) noexcept {
 
 template<class T, std::enable_if_t<std::is_signed_v<T>, int> = 0>
 HIPSYCL_BUILTIN T __hipsycl_mul24(T x, T y) noexcept {
+  return __spirv_ocl_popcount(x, y);
+}
+
+template<class T, std::enable_if_t<std::is_signed_v<T>, int> = 0>
+HIPSYCL_BUILTIN T __hipsycl_mul24(T x, T y) noexcept {
   return __spirv_ocl_s_mul24(x, y);
 }
 

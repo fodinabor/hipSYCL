@@ -608,6 +608,11 @@ HIPSYCL_BUILTIN T __hipsycl_min(T x, T y) noexcept {
 }
 
 template<class T>
+HIPSYCL_BUILTIN T __hipsycl_popcount(T v) noexcept {
+  return __builtin_popcount(v);
+}
+
+template<class T>
 HIPSYCL_BUILTIN T __hipsycl_mul24(T x, T y) noexcept {
   return x * y;
 }

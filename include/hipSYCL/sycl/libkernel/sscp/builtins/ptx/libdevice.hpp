@@ -32,8 +32,8 @@
 
 extern "C" __hipsycl_int32 __nv_clz (__hipsycl_int32);
 extern "C" __hipsycl_int32 __nv_clzll (__hipsycl_int64);
-extern "C" __hipsycl_int32 __nv_popc (__hipsycl_int32);
-extern "C" __hipsycl_int32 __nv_popcll (__hipsycl_int64);
+extern "C" __hipsycl_uint32 __nv_popc (__hipsycl_uint32);
+extern "C" __hipsycl_uint32 __nv_popcll (__hipsycl_uint64);
 extern "C" __hipsycl_int32 __nv_byte_perm (__hipsycl_int32, __hipsycl_int32, __hipsycl_int32);
 extern "C" __hipsycl_int32 __nv_min (__hipsycl_int32, __hipsycl_int32);
 extern "C" __hipsycl_uint32 __nv_umin (__hipsycl_uint32, __hipsycl_uint32);

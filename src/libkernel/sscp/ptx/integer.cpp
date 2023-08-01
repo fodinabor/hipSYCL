@@ -26,8 +26,24 @@
  */
 
 
-#include "hipSYCL/sycl/libkernel/sscp/builtins/interger.hpp"
+#include "hipSYCL/sycl/libkernel/sscp/builtins/integer.hpp"
 #include "hipSYCL/sycl/libkernel/sscp/builtins/ptx/libdevice.hpp"
+
+extern "C" __hipsycl_uint32 __nv_popc (__hipsycl_uint32);
+extern "C" __hipsycl_uint32 __nv_popcll (__hipsycl_uint64);
+
+HIPSYCL_SSCP_BUILTIN __hipsycl_uint32 __hipsycl_sscp_popcount_u32(__hipsycl_uint32 a){
+  return __nv_popc(a);
+}	
+HIPSYCL_SSCP_BUILTIN __hipsycl_uint64 __hipsycl_sscp_popcount_u64(__hipsycl_uint64 a){
+  return __nv_popcll(a);
+}
+HIPSYCL_SSCP_BUILTIN __hipsycl_uint8 __hipsycl_sscp_popcount_u8(__hipsycl_uint8 a){
+  return __hipsycl_sscp_popcount_u32(a);
+}	
+HIPSYCL_SSCP_BUILTIN __hipsycl_uint16 __hipsycl_sscp_popcount_u16(__hipsycl_uint16 a){
+  return __hipsycl_sscp_popcount_u32(a);
+}
 
 extern "C" __hipsycl_int32  __nv_mul24(__hipsycl_int32, __hipsycl_int32);
 extern "C" __hipsycl_uint32 __nv_umul24(__hipsycl_uint32, __hipsycl_uint32);
