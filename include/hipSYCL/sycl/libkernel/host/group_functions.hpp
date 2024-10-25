@@ -639,7 +639,7 @@ HIPSYCL_KERNEL_TARGET T __acpp_inclusive_scan_over_group(group<Dim> g, T x,
   __acpp_group_barrier(g);
 
   if (g.leader()) {
-    for (auto i = 1ul; i < sg.get_group_linear_range(); ++i) {
+    for (auto i = 1ul; i < sg.get_group_linear_range()-1; ++i) {
       scratch[i] = binary_op(scratch[i - 1], scratch[i]);
     }
   }

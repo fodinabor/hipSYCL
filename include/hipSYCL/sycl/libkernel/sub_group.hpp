@@ -49,6 +49,14 @@ constexpr size_t SGSize = 32;
 
 namespace hipsycl::sycl {
 
+#if not HIPSYCL_LIBKERNEL_IS_DEVICE_PASS_SSCP
+extern "C" size_t __hipsycl_cbs_local_id_subgroup;
+extern "C" size_t __hipsycl_cbs_id_subgroup;
+extern "C" size_t __hipsycl_cbs_subgroup_size;
+extern "C" size_t __hipsycl_cbs_num_subgroups;
+extern "C" void* sub_group_shared_memory;
+#endif
+
 #if HIPSYCL_LIBKERNEL_IS_DEVICE_PASS_SSCP
 class sub_group {
 public:
@@ -141,75 +149,6 @@ private:
     return 0;
   }
 };
-#elif USE_RV
-class sub_group {
-public:
-  using id_type = sycl::id<1>;
-  using range_type = sycl::range<1>;
-  using linear_id_type = uint32_t;
-  using linear_range_type = uint32_t;
-
-  static constexpr int dimensions = 1;
-  static constexpr memory_scope fence_scope = memory_scope::sub_group;
-
-  sub_group() {
-    assert(false);
-  }
-
-  sub_group(size_t group_id, size_t num_subgroups, void* local_memory) : _group_id(group_id), _num_subgroups(num_subgroups), _local_memory(local_memory) {}
-
-  HIPSYCL_KERNEL_TARGET
-  id_type get_local_id() const { return id_type{get_local_linear_id()}; }
-
-  HIPSYCL_KERNEL_TARGET
-  linear_id_type get_local_linear_id() const {
-    return rv_lane_id();
-  }
-
-  // always returns the maximum sub_group size
-  HIPSYCL_KERNEL_TARGET
-  range_type get_local_range() const { return range_type{get_local_linear_range()}; }
-
-  // always returns the maximum sub_group size
-  HIPSYCL_KERNEL_TARGET
-  linear_range_type get_local_linear_range() const {
-    return rv_num_lanes(); //  TODO or SGSize?
-  }
-
-  HIPSYCL_KERNEL_TARGET
-  range_type get_max_local_range() const { return range_type{get_local_linear_range()}; }
-
-  HIPSYCL_KERNEL_TARGET
-  id_type get_group_id() const { return id_type{get_group_linear_id()}; }
-
-  HIPSYCL_KERNEL_TARGET
-  linear_id_type get_group_linear_id() const {
-    return rv_is_uniform(_group_id);
-  }
-
-  HIPSYCL_KERNEL_TARGET
-  linear_range_type get_group_linear_range() const {
-    return _num_subgroups;
-  }
-
-  HIPSYCL_KERNEL_TARGET
-  range_type get_group_range() const { return range_type{get_group_linear_range()}; }
-
-  [[deprecated]] HIPSYCL_KERNEL_TARGET range_type get_max_group_range() const {
-    return get_group_range();
-  }
-
-  HIPSYCL_KERNEL_TARGET
-  bool leader() const { return rv_lane_id() == 0; }
-
-  HIPSYCL_KERNEL_TARGET
-  void *get_local_memory_ptr() const { return _local_memory; }
-
-private:
-  size_t _group_id;
-  size_t _num_subgroups;
-  void *_local_memory;
-};
 #else
 class sub_group {
 public:
@@ -221,18 +160,17 @@ public:
   static constexpr int dimensions = 1;
   static constexpr memory_scope fence_scope = memory_scope::sub_group;
 
-  explicit sub_group(size_t group_id, size_t num_subgroups, void *local_memory, size_t subgroup_id)
-      : _group_id(group_id), _num_subgroups(num_subgroups), _local_memory(local_memory),
-        _subgroup_id(subgroup_id) {}
-
-  // Only exists to get code compiling
-  explicit sub_group() : _group_id(0), _num_subgroups(0), _local_memory(nullptr) { assert(false); }
-
   HIPSYCL_KERNEL_TARGET
   id_type get_local_id() const { return id_type{get_local_linear_id()}; }
 
   HIPSYCL_KERNEL_TARGET
-  linear_id_type get_local_linear_id() const { return _subgroup_id; }
+  linear_id_type get_local_linear_id() const {
+#if USE_RV
+    return rv_lane_id();
+#else
+    return __hipsycl_cbs_local_id_subgroup;
+#endif
+  }
 
   // always returns the maximum sub_group size
   HIPSYCL_KERNEL_TARGET
@@ -241,20 +179,30 @@ public:
   // always returns the maximum sub_group size
   HIPSYCL_KERNEL_TARGET
   linear_range_type get_local_linear_range() const {
-    return SGSize; // TODO wrong for incomplete subgroups
+#if USE_RV
+    return __acpp_sscp_get_subgroup_max_size();
+#else
+    return __hipsycl_cbs_subgroup_size;
+#endif
   }
 
   HIPSYCL_KERNEL_TARGET
   range_type get_max_local_range() const { return range_type{SGSize}; }
 
   HIPSYCL_KERNEL_TARGET
-  id_type get_group_id() const { return id_type{get_group_linear_id()}; }
+  id_type get_group_id() const {
+#if USE_RV
+    return rv_is_uniform(__hipsycl_cbs_id_subgroup);
+#else
+    return __hipsycl_cbs_id_subgroup;
+#endif
+  }
 
   HIPSYCL_KERNEL_TARGET
-  linear_id_type get_group_linear_id() const { return _group_id; }
+  linear_id_type get_group_linear_id() const { return __hipsycl_cbs_id_subgroup; }
 
   HIPSYCL_KERNEL_TARGET
-  linear_range_type get_group_linear_range() const { return _num_subgroups; }
+  linear_range_type get_group_linear_range() const { return __hipsycl_cbs_num_subgroups; }
 
   HIPSYCL_KERNEL_TARGET
   range_type get_group_range() const { return range_type{get_group_linear_range()}; }
@@ -269,14 +217,8 @@ public:
   HIPSYCL_KERNEL_TARGET
   void *get_local_memory_ptr() const {
     // TODO not offically supported
-    return _local_memory;
+    return sub_group_shared_memory;
   }
-
-private:
-  size_t _group_id;
-  size_t _num_subgroups;
-  void *_local_memory;
-  size_t _subgroup_id;
 };
 #endif
 

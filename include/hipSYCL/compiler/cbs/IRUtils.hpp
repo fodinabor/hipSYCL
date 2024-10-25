@@ -62,6 +62,9 @@ static constexpr std::array<const char *, 3> LocalIdGlobalNames{LocalIdGlobalNam
 static constexpr const char SgLocalIdGlobalName[] = "__hipsycl_cbs_local_id_subgroup";
 static constexpr const char SgIdGlobalName[] = "__hipsycl_cbs_id_subgroup";
 
+static constexpr const char SgSizeGlobalName[] = "__hipsycl_cbs_subgroup_size";
+static constexpr const char SgNumSubgroupsGlobalName[] = "__hipsycl_cbs_num_subgroups";
+
 static constexpr std::string_view WorkGroupSharedMemory = "work_group_shared_memory";
 static constexpr std::string_view SubGroupSharedMemory = "sub_group_shared_memory";
 

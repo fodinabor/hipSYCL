@@ -478,7 +478,7 @@ template <typename T> T work_inclusive_scan(__acpp_sscp_algorithm_op op, T x) {
   }
   __acpp_cbs_barrier();
   if (isLeader()) {
-    for (auto i = 1ul; i < __acpp_sscp_get_num_subgroups(); ++i) {
+    for (auto i = 1ul; i < __acpp_sscp_get_num_subgroups()-1; ++i) {
       scratch[i] = binary_op(op, scratch[i - 1], scratch[i]);
     }
   }
