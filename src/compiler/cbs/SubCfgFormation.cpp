@@ -417,12 +417,15 @@ void createLoopsAround(llvm::Function &F, llvm::BasicBlock *AfterBB,
   // add contiguous ind var calculation to load block
   Builder.SetInsertPoint(IndVars[InnerMost]->getParent(), ++IndVars[InnerMost]->getIterator());
   llvm::Value *Idx = IndVars[OuterMost];
+  llvm::SmallVector<llvm::Value*, 3> Idxes{};
+  Idxes.emplace_back(Idx);
   for (size_t D = 1; D < Dim; ++D) {
     const std::string Suffix =
         (llvm::Twine{state.DimName[D]} + ".subcfg." + llvm::Twine{EntryId}).str();
 
     Idx = Builder.CreateMul(Idx, LocalSize[D], "idx.mul." + Suffix, true);
     Idx = Builder.CreateAdd(IndVars[D], Idx, "idx.add." + Suffix, true);
+    Idxes.emplace_back(Idx);
   }
 
   for (size_t D = 0; D < Dim; ++D) {
@@ -436,13 +439,29 @@ void createLoopsAround(llvm::Function &F, llvm::BasicBlock *AfterBB,
     VMap[mergeGVLoadsInEntry(F, cbs::SgLocalIdGlobalName)] = Builder.CreateURem(IndVars.back(), llvm::ConstantInt::get(IndVars.back()->getType(), SGSize));
   } else if (HI.Level == HierarchicalLevel::H_CBS_SUBGROUP) {
     VMap[mergeGVLoadsInEntry(F, cbs::SgLocalIdGlobalName)] = Idx;
-    VMap[mergeGVLoadsInEntry(F, cbs::SgIdGlobalName)] = Builder.CreateUDiv(mergeGVLoadsInEntry(F, "__cont_idx_without_sg"), Builder.getInt64(SGSize));
   } else {
     assert(HI.Level == HierarchicalLevel::H_CBS_GROUP);
+
     // InnerMost induction variable + SgSize
     VMap[mergeGVLoadsInEntry(F, state.LocalIdGlobalNames[InnerMost])] =
         Builder.CreateAdd( IndVars[InnerMost], mergeGVLoadsInEntry(F, cbs::SgLocalIdGlobalName));
     Idx = Builder.CreateAdd(Idx, mergeGVLoadsInEntry(F, cbs::SgLocalIdGlobalName));
+
+    VMap[mergeGVLoadsInEntry(F, cbs::SgIdGlobalName)] = [&]() {
+      auto InnerSgId = Builder.CreateUDiv(
+    IndVars[InnerMost],
+        Builder.getInt64(SGSize));
+
+      if (Dim > 1) {
+        // We round up
+        auto *NumSgsInnerMostDimension = Builder.CreateUDiv(
+            Builder.CreateAdd(LocalSize[InnerMost],
+                              Builder.getIntN(state.SizeT->getIntegerBitWidth(), SGSize - 1)),
+            Builder.getIntN(state.SizeT->getIntegerBitWidth(), SGSize));
+        InnerSgId = Builder.CreateAdd(Builder.CreateMul(Idxes[InnerMost-1], NumSgsInnerMostDimension), InnerSgId);
+      }
+      return InnerSgId;
+    }();
 
     auto *IterationsLeft = [&]() {
       auto *InnerDimIterationsLeft = Builder.CreateSub(LocalSize[InnerMost], IndVars[InnerMost]);
@@ -995,6 +1014,9 @@ void SubCFG::loadUniformAndRecalcContValues(
   auto& F = *this->LoadBB_->getParent();
   if (HI.Level == HierarchicalLevel::CBS or HI.Level == HierarchicalLevel::H_CBS_SUBGROUP) {
     UniVMap[mergeGVLoadsInEntry(F, cbs::SgLocalIdGlobalName)] = VMap[mergeGVLoadsInEntry(F, cbs::SgLocalIdGlobalName)];
+
+  }
+  if (HI.Level == HierarchicalLevel::CBS or HI.Level == HierarchicalLevel::H_CBS_GROUP) {
     UniVMap[mergeGVLoadsInEntry(F, cbs::SgIdGlobalName)] = VMap[mergeGVLoadsInEntry(F, cbs::SgIdGlobalName)];
   }
 

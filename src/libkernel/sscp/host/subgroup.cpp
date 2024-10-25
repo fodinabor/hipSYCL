@@ -46,7 +46,7 @@ HIPSYCL_SSCP_BUILTIN __acpp_uint32 __acpp_sscp_get_subgroup_local_id() {
 
 HIPSYCL_SSCP_BUILTIN __acpp_uint32 __acpp_sscp_get_subgroup_size() {
 #if USE_RV
-  return __acpp_sscp_get_subgroup_max_size();
+  return rv_num_lanes();
 #else
   return __hipsycl_cbs_subgroup_size;
 #endif

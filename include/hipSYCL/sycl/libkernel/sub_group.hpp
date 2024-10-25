@@ -180,7 +180,7 @@ public:
   HIPSYCL_KERNEL_TARGET
   linear_range_type get_local_linear_range() const {
 #if USE_RV
-    return __acpp_sscp_get_subgroup_max_size();
+    return rv_num_lanes();
 #else
     return __hipsycl_cbs_subgroup_size;
 #endif
@@ -191,15 +191,17 @@ public:
 
   HIPSYCL_KERNEL_TARGET
   id_type get_group_id() const {
+    return id_type{get_group_linear_id()};
+  }
+
+  HIPSYCL_KERNEL_TARGET
+  linear_id_type get_group_linear_id() const {
 #if USE_RV
     return rv_is_uniform(__hipsycl_cbs_id_subgroup);
 #else
     return __hipsycl_cbs_id_subgroup;
 #endif
   }
-
-  HIPSYCL_KERNEL_TARGET
-  linear_id_type get_group_linear_id() const { return __hipsycl_cbs_id_subgroup; }
 
   HIPSYCL_KERNEL_TARGET
   linear_range_type get_group_linear_range() const { return __hipsycl_cbs_num_subgroups; }
