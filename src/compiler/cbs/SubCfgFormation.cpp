@@ -295,6 +295,9 @@ VectorizationInfo getVectorizationInfo(llvm::Function &F, Region &R, llvm::LoopI
   if (HI.Level == HierarchicalLevel::H_CBS_SUBGROUP) {
     VecInfo.setPinnedShape(*mergeGVLoadsInEntry(F, cbs::SgIdGlobalName), VectorShape::uni());
   }
+  if (HI.Level == HierarchicalLevel::CBS or HI.Level == HierarchicalLevel::H_CBS_GROUP) {
+    VecInfo.setPinnedShape(*mergeGVLoadsInEntry(F, cbs::SgIdGlobalName), VectorShape::cont());
+  }
   VecInfo.setPinnedShape(*mergeGVLoadsInEntry(F, cbs::SgNumSubgroupsGlobalName), VectorShape::uni());
   VecInfo.setPinnedShape(*HI.ContiguousIdx, VectorShape::cont());
 
@@ -835,7 +838,9 @@ void SubCFG::arrayifyMultiSubCfgValues(
 
   for (auto *BB : Blocks_) {
     for (auto &I : *BB) {
-      if (&I == ContiguousIdx)
+      if (&I == ContiguousIdx or isLoadFromGV(&I, F, cbs::WorkGroupSharedMemory) or
+          isLoadFromGV(&I, F, cbs::SubGroupSharedMemory) or
+          isLoadFromGV(&I, F, cbs::SgIdGlobalName))
         continue;
       if (InstAllocaMap.lookup(&I)) {
         continue;
@@ -873,21 +878,8 @@ void SubCFG::arrayifyMultiSubCfgValues(
         auto Shape = VecInfo.getVectorShape(I);
         HIPSYCL_DEBUG_ERROR << "VECTOR INFO: " << Shape << "\n";
 
-        const auto isTrivialStepAway = [&F](llvm::Instruction &I,  llvm::StringRef S) {
-          auto getInsideRvUniform = [](llvm::Value* V)-> llvm::Value* {
-            if (V == nullptr) {
-              return nullptr;
-            }
-            if (auto *OpI = llvm::dyn_cast<llvm::Instruction>(V)) {
-              if (const auto CallInst = llvm::dyn_cast<llvm::CallInst>(OpI)) {
-                if (CallInst->getCalledFunction()->getName().contains("rv_is_uniform")) {
-                  return CallInst->getOperand(0);
-                }
-              }
-            }
-            return nullptr;
-          };
-          auto *V = [&]() -> llvm::Value* {
+        const auto isTrivialStepAway = [&](llvm::Instruction &I) {
+          auto *V = [&]() -> llvm::Value * {
             if (I.isBinaryOp()) {
               if (llvm::dyn_cast<llvm::Constant>(I.getOperand(0))) {
                 return I.getOperand(1);
@@ -899,21 +891,32 @@ void SubCFG::arrayifyMultiSubCfgValues(
                 I.getOpcode() == llvm::Instruction::SExt or
                 I.getOpcode() == llvm::Instruction::BitCast) {
               return I.getOperand(0);
-                }
+            }
             return nullptr;
           }();
-
-          return isLoadFromGV(&I, F, S) or isLoadFromGV(getInsideRvUniform(&I), F, S) or isLoadFromGV(V, F, S) or isLoadFromGV(getInsideRvUniform(V), F, S);
+          if (not V) {
+            return false;
+          }
+          return VecInfo.getVectorShape(*V).isContiguousOrStrided();
         };
+
+        const bool UsedByCbsIntrinsic = utils::anyOfUsers<llvm::Instruction>(&I, [](auto *UI) {
+          if (auto *CallInst = llvm::dyn_cast<llvm::CallInst>(UI);
+              CallInst and CallInst->getCalledFunction()) {
+            return CallInst->getCalledFunction()->getName().contains("__cbs_");
+          }
+          return false;
+        });
 
         // if contiguous, and can be recalculated, don't arrayify but store
         // uniform values and insts required for recalculation
-        if (Shape.isContiguousOrStrided() or isTrivialStepAway(I, cbs::SgIdGlobalName) or isTrivialStepAway(I, cbs::SgLocalIdGlobalName)) {
+        if (not UsedByCbsIntrinsic and (Shape.isContiguousOrStrided() or isTrivialStepAway(I))) {
           if (dontArrayifyValues(I, BaseInstAllocaMap, ContInstReplicaMap, AllocaIP,
                                  ReqdArrayElements, ContiguousIdx, VecInfo)) {
             HIPSYCL_DEBUG_INFO << "[SubCFG] Not arrayifying " << I << "\n";
             continue;
           }
+          HIPSYCL_DEBUG_INFO << "[SubCFG] considered not arrayifing but decided not to " << I << "\n";
         }
 
 #ifndef HIPSYCL_NO_PHIS_IN_SPLIT

@@ -48,7 +48,7 @@ size_t get_local_linear_id() {
 }
 
 bool isLeader() {
-	return __acpp_sscp_get_subgroup_local_id() == 0 and __acpp_sscp_get_subgroup_id() == 0;
+	return get_local_linear_id() == 0 and __acpp_sscp_get_subgroup_id() == 0;
 }
 
 size_t get_local_size() {
