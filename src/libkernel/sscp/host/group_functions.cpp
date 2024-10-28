@@ -232,7 +232,6 @@ template <typename T> T sub_reduce(__acpp_sscp_algorithm_op op, T x) {
   if (operation != ReduceOp::NOT_SUPPORTED and USE_REDUCE_INTRINSIC) {
     __acpp_cbs_sub_barrier();
     const T t = __cbs_reduce(x, static_cast<int>(operation));
-    __acpp_cbs_sub_barrier();
     return t;
   } else {
     T *scratch = static_cast<T *>(sub_group_shared_memory);
