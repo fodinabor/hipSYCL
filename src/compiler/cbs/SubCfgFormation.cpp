@@ -878,8 +878,21 @@ void SubCFG::arrayifyMultiSubCfgValues(
         auto Shape = VecInfo.getVectorShape(I);
         HIPSYCL_DEBUG_ERROR << "VECTOR INFO: " << Shape << "\n";
 
-        const auto isTrivialStepAway = [&](llvm::Instruction &I) {
-          auto *V = [&]() -> llvm::Value * {
+        const auto isTrivialStepAway = [&F](llvm::Instruction &I,  llvm::StringRef S) {
+          auto getInsideRvUniform = [](llvm::Value* V)-> llvm::Value* {
+            if (V == nullptr) {
+              return nullptr;
+            }
+            if (auto *OpI = llvm::dyn_cast<llvm::Instruction>(V)) {
+              if (const auto CallInst = llvm::dyn_cast<llvm::CallInst>(OpI)) {
+                if (CallInst->getCalledFunction()->getName().contains("rv_is_uniform")) {
+                  return CallInst->getOperand(0);
+                }
+              }
+            }
+            return nullptr;
+          };
+          auto *V = [&]() -> llvm::Value* {
             if (I.isBinaryOp()) {
               if (llvm::dyn_cast<llvm::Constant>(I.getOperand(0))) {
                 return I.getOperand(1);
@@ -891,13 +904,11 @@ void SubCFG::arrayifyMultiSubCfgValues(
                 I.getOpcode() == llvm::Instruction::SExt or
                 I.getOpcode() == llvm::Instruction::BitCast) {
               return I.getOperand(0);
-            }
+                }
             return nullptr;
           }();
-          if (not V) {
-            return false;
-          }
-          return VecInfo.getVectorShape(*V).isContiguousOrStrided();
+
+          return isLoadFromGV(&I, F, S) or isLoadFromGV(getInsideRvUniform(&I), F, S) or isLoadFromGV(V, F, S) or isLoadFromGV(getInsideRvUniform(V), F, S);
         };
 
         const bool UsedByCbsIntrinsic = utils::anyOfUsers<llvm::Instruction>(&I, [](auto *UI) {
@@ -910,7 +921,7 @@ void SubCFG::arrayifyMultiSubCfgValues(
 
         // if contiguous, and can be recalculated, don't arrayify but store
         // uniform values and insts required for recalculation
-        if (not UsedByCbsIntrinsic and (Shape.isContiguousOrStrided() or isTrivialStepAway(I))) {
+        if (not UsedByCbsIntrinsic and (isTrivialStepAway(I, cbs::SgIdGlobalName))) {
           if (dontArrayifyValues(I, BaseInstAllocaMap, ContInstReplicaMap, AllocaIP,
                                  ReqdArrayElements, ContiguousIdx, VecInfo)) {
             HIPSYCL_DEBUG_INFO << "[SubCFG] Not arrayifying " << I << "\n";
