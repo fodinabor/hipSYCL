@@ -50,15 +50,17 @@ void markLoopParallel(llvm::Function &F, llvm::Loop *L) {
  vectorize.
  */
 
+  if (llvm::findOptionMDForLoop(L, hipsycl::compiler::MDKind::AllocaProblem)) {
+    llvm::outs() << "ALLOCA PROBLEM. NOT marking loop as parallel\n";
+    return;
+  }
 
   // Mark memory accesses with access group
   auto *MDAccessGroup = llvm::MDNode::getDistinct(F.getContext(), {});
   for (auto *BB : L->blocks()) {
     for (auto &I : *BB) {
       if (I.mayReadOrWriteMemory() && !I.hasMetadata(llvm::LLVMContext::MD_access_group)) {
-        if (auto *MDArrayified = I.getMetadata(MDKind::Arrayified); MDArrayified or USE_RV) {
-          utils::addAccessGroupMD(&I, MDAccessGroup);
-        }
+        utils::addAccessGroupMD(&I, MDAccessGroup);
       }
     }
   }

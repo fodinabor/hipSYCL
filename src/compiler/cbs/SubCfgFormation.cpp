@@ -530,6 +530,7 @@ class SubCFG {
   llvm::BasicBlock *createUniformLoadBB(llvm::BasicBlock *OuterMostHeader);
 
 public:
+  llvm::BasicBlock *WILoopLatch;
   SubCFG(llvm::BasicBlock *EntryBarrier, llvm::AllocaInst *LastBarrierIdStorage,
          const llvm::DenseMap<llvm::BasicBlock *, size_t> &BarrierIds,
          const SplitterAnnotationInfo &SAA, size_t Dim, HierarchicalSplitInfo HI);
@@ -730,6 +731,7 @@ void SubCFG::replicate(
 
   EntryBB_ = PreHeader_;
   ExitBB_ = Latches[0];
+  WILoopLatch = Latches[Dim-1];
   HI.ContiguousIdx = Idx;
 }
 
@@ -1349,7 +1351,7 @@ void fillUserHull(llvm::Value *Alloca, llvm::SmallVectorImpl<llvm::Instruction *
 }
 
 // checks if all uses of an alloca are in just a single subcfg (doesn't have to be arrayified!)
-bool isAllocaSubCfgInternal(llvm::Value *Alloca, const std::vector<SubCFG> &SubCfgs,
+std::optional<SubCFG*> isAllocaSubCfgInternal(llvm::Value *Alloca, std::vector<SubCFG> &SubCfgs,
                             const llvm::DominatorTree &DT) {
   llvm::SmallPtrSet<llvm::BasicBlock *, 16> UserBlocks;
   {
@@ -1364,8 +1366,8 @@ bool isAllocaSubCfgInternal(llvm::Value *Alloca, const std::vector<SubCFG> &SubC
     llvm::SmallPtrSet<llvm::BasicBlock *, 8> SubCfgSet{SubCfg.getNewBlocks().begin(),
                                                        SubCfg.getNewBlocks().end()};
     if (std::any_of(UserBlocks.begin(), UserBlocks.end(),
-                    [&SubCfgSet](auto *BB) { return SubCfgSet.contains(BB); }) &&
-        !std::all_of(UserBlocks.begin(), UserBlocks.end(), [&SubCfgSet, Alloca](auto *BB) {
+                    [&SubCfgSet](auto *BB) { return SubCfgSet.contains(BB); })) {
+      if (!std::all_of(UserBlocks.begin(), UserBlocks.end(), [&SubCfgSet, Alloca](auto *BB) {
           if (SubCfgSet.contains(BB)) {
             return true;
           }
@@ -1373,11 +1375,15 @@ bool isAllocaSubCfgInternal(llvm::Value *Alloca, const std::vector<SubCFG> &SubC
                              << " for alloca: ";
           HIPSYCL_DEBUG_EXECUTE_INFO(Alloca->print(llvm::outs()); llvm::outs() << "\n";)
           return false;
-        }))
-      return false;
+        })) {
+           return std::nullopt;
+      } else {
+        return &SubCfg;
+      }
+    }
   }
 
-  return true;
+  return nullptr;
 }
 
 llvm::GetElementPtrInst * createGEP(llvm::AllocaInst *Alloca,
@@ -1428,14 +1434,27 @@ void arrayifyAllocas(llvm::BasicBlock *EntryBlock, llvm::DominatorTree &DT,
         if (auto shape = VecInfo.getVectorShape(*Alloca); shape.isUniform()) {
           continue;
         }
-        if (not isAllocaSubCfgInternal(Alloca, SubCfgs, DT)) {
+        if (auto SubCfg = isAllocaSubCfgInternal(Alloca, SubCfgs, DT)) {
+          if (*SubCfg) {
+#if USE_RV
+            WLSubCfgInternal.push_back(Alloca);
+#else
+            if (HI.Level == HierarchicalLevel::H_CBS_SUBGROUP or HI.Level == HierarchicalLevel::CBS) {
+              auto *MDWorkItemLoop = llvm::MDNode::get(
+                  F.getContext(), {llvm::MDString::get(F.getContext(), MDKind::WorkItemLoop)});
+              auto *MDAllocaProblem = llvm::MDNode::get(
+                  F.getContext(), {llvm::MDString::get(F.getContext(), MDKind::AllocaProblem)});
+              auto *LoopId = llvm::makePostTransformationMetadata(F.getContext(), nullptr, {},
+                                                                  {MDWorkItemLoop, MDAllocaProblem});
+              (*SubCfg)->WILoopLatch->getTerminator()->setMetadata("llvm.loop", LoopId);
+            }
+          }
+#endif
+        } else {
           WL.push_back(Alloca);
-        } else if constexpr (USE_RV) {
-          WLSubCfgInternal.push_back(Alloca);
         }
       }
     }
-
 
     for (auto *I : WLSubCfgInternal) {
       for (auto &SubCfg : SubCfgs) {
