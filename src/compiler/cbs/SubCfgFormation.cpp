@@ -1448,8 +1448,8 @@ void arrayifyAllocas(llvm::BasicBlock *EntryBlock, llvm::DominatorTree &DT,
                                                                   {MDWorkItemLoop, MDAllocaProblem});
               (*SubCfg)->WILoopLatch->getTerminator()->setMetadata("llvm.loop", LoopId);
             }
-          }
 #endif
+          }
         } else {
           WL.push_back(Alloca);
         }
