@@ -731,7 +731,7 @@ void SubCFG::replicate(
 
   EntryBB_ = PreHeader_;
   ExitBB_ = Latches[0];
-  WILoopLatch = Latches[Dim-1];
+  WILoopLatch = Latches.back();
   HI.ContiguousIdx = Idx;
 }
 
