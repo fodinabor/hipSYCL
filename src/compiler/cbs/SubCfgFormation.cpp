@@ -1633,7 +1633,7 @@ private:
         return Builder.CreateSelect(EnoughIterationsLeft, Builder.getInt64(SGSize), InnerDimIterationsLeft);
       }();
 
-      res = vectorizeUniformValue(Storage, Builder, Intrinsic, Builder.CreateTruncOrBitCast(SGIterations, Storage->getType()));
+      res = vectorizeUniformValue(Storage, Builder, Intrinsic, SGIterations);
     } else {
       auto *VType = llvm::VectorType::get(Op0->getType(), llvm::ElementCount::getFixed(SGSize));
 
@@ -1748,29 +1748,21 @@ private:
 class ReduceIntrinsic final : public CBSIntrinsic {
   std::string_view getName() override { return "__cbs_reduce"; }
 
+  std::string getTypeStr(llvm::Type* Type) {
+    std::string type_str;
+    llvm::raw_string_ostream rso(type_str);
+    Type->print(rso);
+    return rso.str();
+  }
+
   std::pair<llvm::Value *, Shape> vectorizeUniformValue(llvm::Value *Storage,
                                                         llvm::IRBuilder<> &Builder,
                                                         llvm::CallInst &Intrinsic, llvm::Value* NumberOfLoopIterationsLeft) override {
     auto *Idx = llvm::dyn_cast<llvm::ConstantInt>(Intrinsic.getOperand(1));
+    auto *Type = Storage->getType();
     assert(Idx and "Op must be constant int");
     const auto v = Idx->getSExtValue();
-    // ADD
-    if (v == 0) {
-      return {Builder.CreateMul(Storage, NumberOfLoopIterationsLeft),
-              Shape::UNIFORM};
-    }
-    // MUL
-    if (v == 1) {
-      // POW(, 32)
-
-      // TODO
-      assert(false);
-      llvm::Value *result = Storage;
-      for (auto i = 1ul; i < SGSize; ++i) {
-        result = Builder.CreateMul(result, Storage);
-      }
-      return {result, Shape::UNIFORM};
-    }
+    const bool isInt = Type->isIntegerTy();
     // min
     if (v == 2) {
       return {Storage, Shape::UNIFORM};
@@ -1779,6 +1771,37 @@ class ReduceIntrinsic final : public CBSIntrinsic {
     if (v == 3) {
       return {Storage, Shape::UNIFORM};
     }
+
+    if (v == 0) {
+      // ADD
+      if (isInt)
+        return {Builder.CreateMul(Storage,
+                                  Builder.CreateIntCast(NumberOfLoopIterationsLeft, Type, false)),
+                Shape::UNIFORM};
+      return {Builder.CreateFMul(
+                  Storage, Builder.CreateUIToFP(NumberOfLoopIterationsLeft, Storage->getType())),
+              Shape::UNIFORM};
+    }
+    if (v == 1) {
+      auto M = Intrinsic.getParent()->getParent()->getParent();
+      if (not isInt) {
+        auto *Pow =
+            llvm::Intrinsic::getDeclaration(M, llvm::Intrinsic::powi, {Type, Builder.getInt32Ty()});
+        llvm::Value *result = Storage;
+        llvm::SmallVector<llvm::Value *> Args{
+            result, Builder.CreateIntCast(NumberOfLoopIterationsLeft, Builder.getInt32Ty(), false)};
+        result = Builder.CreateCall(Pow, Args);
+        return {result, Shape::UNIFORM};
+      }
+      // WTF LLVM does not have integer pow intrinsic only floating point
+      auto *Pow = createPowFunction(M, Type);
+      llvm::Value *result = Storage;
+      llvm::SmallVector<llvm::Value *> Args{
+          result, Builder.CreateIntCast(NumberOfLoopIterationsLeft, Builder.getInt32Ty(), false)};
+      result = Builder.CreateCall(Pow, Args);
+      return {result, Shape::UNIFORM};
+    }
+
     assert(false);
     return {};
   }
@@ -1852,7 +1875,59 @@ class ReduceIntrinsic final : public CBSIntrinsic {
     return {};
     return llvm::ConstantInt::get(Type, 0);
   }
-};
+
+  llvm::Function* createPowFunction(llvm::Module* module, llvm::Type* Type) {
+    llvm::LLVMContext& context = module->getContext();
+    llvm::IRBuilder<> builder(context);
+
+    llvm::FunctionType* funcType = llvm::FunctionType::get(Type, {Type, builder.getInt32Ty()}, false);
+    auto powFunction = llvm::dyn_cast<llvm::Function>(module->getOrInsertFunction("pow." + getTypeStr(Type), funcType).getCallee());
+
+    // Create a basic block and set the insert point
+    llvm::BasicBlock* entry = llvm::BasicBlock::Create(context, "entry", powFunction);
+    builder.SetInsertPoint(entry);
+
+    // Get function arguments
+    auto args = powFunction->arg_begin();
+    llvm::Value* base = args++;
+    base->setName("base");
+    llvm::Value* exponent = args++;
+    exponent->setName("exponent");
+
+    // Initialize loop variables
+    llvm::AllocaInst* result = builder.CreateAlloca(Type, nullptr, "result");
+    llvm::Value* counter = builder.CreateAlloca(exponent->getType(), nullptr, "counter");
+    builder.CreateStore(builder.getIntN(exponent->getType()->getIntegerBitWidth(), 0), counter);
+    builder.CreateStore(builder.getIntN(Type->getIntegerBitWidth(), 1), result);
+
+    // Create loop blocks
+    llvm::BasicBlock* loopBB = llvm::BasicBlock::Create(context, "loop", powFunction);
+    llvm::BasicBlock* afterLoopBB = llvm::BasicBlock::Create(context, "afterloop", powFunction);
+
+    // Branch to loop block
+    builder.CreateBr(loopBB);
+    builder.SetInsertPoint(loopBB);
+
+    // Load counter value
+    llvm::Value* counterValue = builder.CreateLoad(exponent->getType(), counter, "counterValue");
+
+    // Loop body
+    llvm::Value* nextCounter = builder.CreateAdd(counterValue, builder.getIntN(exponent->getType()->getIntegerBitWidth(), 1), "nextcounter");
+    builder.CreateStore(nextCounter, counter);
+    auto resultX = builder.CreateMul(builder.CreateLoad(result->getAllocatedType(), result), base, "result");
+    builder.CreateStore(resultX, result);
+
+    llvm::Value* cond = builder.CreateICmpULT(nextCounter, exponent, "loopcond");
+    builder.CreateCondBr(cond, loopBB, afterLoopBB);
+
+    builder.SetInsertPoint(afterLoopBB);
+
+    builder.CreateRet(builder.CreateLoad(result->getAllocatedType(), result));
+
+    return powFunction;
+  }
+
+  };
 
 template <bool Left> class Shift final : public CBSIntrinsic {
   std::string_view getName() override { return Left ? "__cbs_shift_left" : "__cbs_shift_right"; }
