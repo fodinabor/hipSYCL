@@ -333,7 +333,7 @@ HIPSYCL_KERNEL_TARGET T __acpp_shift_group_left(sub_group g, T x,
 #if USE_RV
   return shuffle_down_impl(x, delta);
 #else
-  if constexpr (std::is_integral_v<T> and USE_CBS_SHUFFLE) {
+  if constexpr (std::is_integral_v<T> && USE_CBS_SHUFFLE) {
     __acpp_group_barrier(g);
     const auto pos = g.get_local_linear_id() + delta >= g.get_local_range().size()
                          ? 0
@@ -366,7 +366,7 @@ HIPSYCL_KERNEL_TARGET T __acpp_shift_group_right(sub_group g, T x,
 #if USE_RV
   return shuffle_up_impl(x, delta);
 #else
-  if constexpr (std::is_integral_v<T> and USE_CBS_SHUFFLE) {
+  if constexpr (std::is_integral_v<T> && USE_CBS_SHUFFLE) {
     __acpp_group_barrier(g);
     const auto pos = g.get_local_linear_id() - delta >= g.get_local_range().size()
                          ? g.get_max_local_range().size()
@@ -430,7 +430,7 @@ HIPSYCL_KERNEL_TARGET T __acpp_reduce_over_group(sub_group g, T x, BinaryOperati
   static_assert(std::is_fundamental_v<T>);
   constexpr int op = reduce_supported_op<BinaryOperation, T>();
 #if USE_RV
-  if constexpr (op >= 0 and USE_REDUCE_INTRINSIC) {
+  if constexpr (op >= 0 && USE_REDUCE_INTRINSIC) {
     return rv_reduce(x, op);
   } else {
     auto local_x = x;
@@ -442,7 +442,7 @@ HIPSYCL_KERNEL_TARGET T __acpp_reduce_over_group(sub_group g, T x, BinaryOperati
     return __acpp_group_broadcast(g, local_x, 0);
   }
 #else
-  if constexpr (op >= 0 and USE_REDUCE_INTRINSIC) {
+  if constexpr (op >= 0 && USE_REDUCE_INTRINSIC) {
     __acpp_group_barrier(g);
     T tmp = __cbs_reduce(x, op);
     __acpp_group_barrier(g);
@@ -765,7 +765,7 @@ HIPSYCL_KERNEL_TARGET T __acpp_select_from_group(sub_group g, T x,
 #if USE_RV
   return shuffle_impl(x, remote_local_id);
 #else
-  if constexpr (std::is_integral_v<T> and USE_CBS_SHUFFLE) {
+  if constexpr (std::is_integral_v<T> && USE_CBS_SHUFFLE) {
     __acpp_group_barrier(g);
     auto tmp = __cbs_shuffle(x, remote_local_id);
     __acpp_group_barrier(g);

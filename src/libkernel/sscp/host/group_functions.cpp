@@ -1,4 +1,4 @@
-#include "../../../../include/hipSYCL/compiler/cbs/IRUtils.hpp"
+#include "hipSYCL/compiler/cbs/IRUtils.hpp"
 #include "hipSYCL/sycl/libkernel/sscp/builtins/broadcast.hpp"
 #include "hipSYCL/sycl/libkernel/sscp/builtins/core.hpp"
 #include "hipSYCL/sycl/libkernel/sscp/builtins/host/host.h"
@@ -48,7 +48,7 @@ size_t get_local_linear_id() {
 }
 
 bool isLeader() {
-	return get_local_linear_id() == 0 and __acpp_sscp_get_subgroup_id() == 0;
+	return get_local_linear_id() == 0 && __acpp_sscp_get_subgroup_id() == 0;
 }
 
 size_t get_local_size() {
@@ -192,7 +192,7 @@ template <typename T, std::enable_if_t<std::is_integral_v<T>, bool> = true> cons
   return {};
 }
 
-template <typename T, std::enable_if_t<not std::is_integral_v<T>, bool> = true> constexpr T binary_op(__acpp_sscp_algorithm_op op, T x, T y) {
+template <typename T, std::enable_if_t<! std::is_integral_v<T>, bool> = true> constexpr T binary_op(__acpp_sscp_algorithm_op op, T x, T y) {
   switch (op) {
   case __acpp_sscp_algorithm_op::plus:
     return x + y;
@@ -209,6 +209,7 @@ template <typename T, std::enable_if_t<not std::is_integral_v<T>, bool> = true> 
   case __acpp_sscp_algorithm_op::bit_and:
   case __acpp_sscp_algorithm_op::bit_or:
   case __acpp_sscp_algorithm_op::bit_xor:
+    break;
   }
   assert(false);
   return {};
@@ -217,7 +218,7 @@ template <typename T, std::enable_if_t<not std::is_integral_v<T>, bool> = true> 
 template <typename T> T sub_reduce(__acpp_sscp_algorithm_op op, T x) {
   ReduceOp operation = reduce_op_map(op);
 #if USE_RV
-  if (operation != ReduceOp::NOT_SUPPORTED and USE_REDUCE_INTRINSIC) {
+  if (operation != ReduceOp::NOT_SUPPORTED && USE_REDUCE_INTRINSIC) {
     return rv_reduce(x, static_cast<int>(operation));
   } else  {
     auto local_x = x;
@@ -229,7 +230,7 @@ template <typename T> T sub_reduce(__acpp_sscp_algorithm_op op, T x) {
     return sub_broadcast(0, local_x);
   }
 #else
-  if (operation != ReduceOp::NOT_SUPPORTED and USE_REDUCE_INTRINSIC) {
+  if (operation != ReduceOp::NOT_SUPPORTED && USE_REDUCE_INTRINSIC) {
     __acpp_cbs_sub_barrier();
     const T t = __cbs_reduce(x, static_cast<int>(operation));
     return t;
@@ -427,10 +428,10 @@ bool __acpp_sscp_sub_group_all(bool pred) {
 }
 
 HIPSYCL_SSCP_CONVERGENT_BUILTIN
-bool __acpp_sscp_work_group_none(bool pred) { return __acpp_sscp_work_group_all(not pred); }
+bool __acpp_sscp_work_group_none(bool pred) { return __acpp_sscp_work_group_all(!pred); }
 
 HIPSYCL_SSCP_CONVERGENT_BUILTIN
-bool __acpp_sscp_sub_group_none(bool pred) { return __acpp_sscp_sub_group_all(not pred); }
+bool __acpp_sscp_sub_group_none(bool pred) { return __acpp_sscp_sub_group_all(!pred); }
 
 
 template <typename T> T sub_inclusive_scan(__acpp_sscp_algorithm_op op, T x) {

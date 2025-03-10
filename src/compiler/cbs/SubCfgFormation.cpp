@@ -112,7 +112,7 @@ llvm::LoadInst *mergeGVLoadsInEntry(llvm::Function &F, llvm::StringRef VarName,
   }
 
   if (FirstLoad) {
-    if (Loads.size() > 0 or FirstLoad->getParent() != &F.getEntryBlock()) {
+    if (Loads.size() > 0 || FirstLoad->getParent() != &F.getEntryBlock()) {
       FirstLoad->moveBefore(&F.getEntryBlock().front());
       for (auto *LI : Loads) {
         LI->replaceAllUsesWith(FirstLoad);
@@ -128,7 +128,7 @@ llvm::LoadInst *mergeGVLoadsInEntry(llvm::Function &F, llvm::StringRef VarName,
 }
 
 bool isLoadFromGV(llvm::Value* V, llvm::Function &F, llvm::StringRef VarName) {
-  if (not V) {
+  if (!V) {
     return false;
   }
   auto SizeT = F.getParent()->getDataLayout().getLargestLegalIntType(F.getContext());
@@ -239,7 +239,7 @@ void replaceUsesOfGVWith(llvm::Function &F, llvm::StringRef GlobalVarName, llvm:
       I->replaceAllUsesWith(To);
       ToErase.emplace_back(I);
     } else if (auto I = llvm::dyn_cast<llvm::Instruction>(U)) {
-      assert(not "FAIL");
+      assert(!"FAIL");
     }
   }
   for (auto I : ToErase)
@@ -295,7 +295,7 @@ VectorizationInfo getVectorizationInfo(llvm::Function &F, Region &R, llvm::LoopI
   if (HI.Level == HierarchicalLevel::H_CBS_SUBGROUP) {
     VecInfo.setPinnedShape(*mergeGVLoadsInEntry(F, cbs::SgIdGlobalName), VectorShape::uni());
   }
-  if (HI.Level == HierarchicalLevel::CBS or HI.Level == HierarchicalLevel::H_CBS_GROUP) {
+  if (HI.Level == HierarchicalLevel::CBS || HI.Level == HierarchicalLevel::H_CBS_GROUP) {
     VecInfo.setPinnedShape(*mergeGVLoadsInEntry(F, cbs::SgIdGlobalName), VectorShape::cont());
   }
   VecInfo.setPinnedShape(*mergeGVLoadsInEntry(F, cbs::SgNumSubgroupsGlobalName), VectorShape::uni());
@@ -409,7 +409,7 @@ void createLoopsAround(llvm::Function &F, llvm::BasicBlock *AfterBB,
   VMap[AfterBB] = Latches[InnerMost];
 
   // Mark work-item loop as parallel
-  if (HI.Level == HierarchicalLevel::H_CBS_SUBGROUP or HI.Level == HierarchicalLevel::CBS) {
+  if (HI.Level == HierarchicalLevel::H_CBS_SUBGROUP || HI.Level == HierarchicalLevel::CBS) {
     auto *MDWorkItemLoop = llvm::MDNode::get(
         F.getContext(), {llvm::MDString::get(F.getContext(), MDKind::WorkItemLoop)});
     auto *LoopID =
@@ -622,7 +622,7 @@ SubCFG::SubCFG(llvm::BasicBlock *EntryBarrier, llvm::AllocaInst *LastBarrierIdSt
     : EntryId_(BarrierIds.lookup(EntryBarrier)), EntryBarrier_(EntryBarrier),
       LastBarrierIdStorage_(LastBarrierIdStorage), EntryBB_(EntryBarrier->getSingleSuccessor()),
       LoadBB_(nullptr), PreHeader_(nullptr), Dim(Dim), HI(HI) {
-  // if (not EntryBB_)
+  // if (!EntryBB_)
   //  EntryBarrier->getParent()->viewCFG();
   assert(EntryBB_);
 
@@ -795,7 +795,7 @@ bool dontArrayifyValues(
 
         // collect cont and uniform source values
         if (auto *OpI = llvm::dyn_cast<llvm::Instruction>(V)) {
-          if (not VecInfo.getVectorShape(*OpI).isUniform() or isLoadFromGV(OpI, F, cbs::SgIdGlobalName) or isLoadFromGV(OpI, F, cbs::SgLocalIdGlobalName)) {
+          if (!VecInfo.getVectorShape(*OpI).isUniform() || isLoadFromGV(OpI, F, cbs::SgIdGlobalName) || isLoadFromGV(OpI, F, cbs::SgLocalIdGlobalName)) {
             WL.push_back(OpI);
             ContiguousInsts.push_back(OpI);
           } else if (!UniformValues.contains(OpI))
@@ -840,7 +840,7 @@ void SubCFG::arrayifyMultiSubCfgValues(
 
   for (auto *BB : Blocks_) {
     for (auto &I : *BB) {
-      if (&I == ContiguousIdx or isLoadFromGV(&I, F, cbs::WorkGroupSharedMemory) or
+      if (&I == ContiguousIdx || isLoadFromGV(&I, F, cbs::WorkGroupSharedMemory) ||
           isLoadFromGV(&I, F, cbs::SubGroupSharedMemory) or
           isLoadFromGV(&I, F, cbs::SgIdGlobalName))
         continue;
@@ -910,7 +910,7 @@ void SubCFG::arrayifyMultiSubCfgValues(
             return nullptr;
           }();
 
-          return isLoadFromGV(&I, F, S) or isLoadFromGV(getInsideRvUniform(&I), F, S) or isLoadFromGV(V, F, S) or isLoadFromGV(getInsideRvUniform(V), F, S);
+          return isLoadFromGV(&I, F, S) || isLoadFromGV(getInsideRvUniform(&I), F, S) || isLoadFromGV(V, F, S) || isLoadFromGV(getInsideRvUniform(V), F, S);
         };
 
         const bool UsedByCbsIntrinsic = utils::anyOfUsers<llvm::Instruction>(&I, [](auto *UI) {
@@ -923,7 +923,7 @@ void SubCFG::arrayifyMultiSubCfgValues(
 
         // if contiguous, and can be recalculated, don't arrayify but store
         // uniform values and insts required for recalculation
-        if (not UsedByCbsIntrinsic and (isTrivialStepAway(I, cbs::SgIdGlobalName))) {
+        if (!UsedByCbsIntrinsic && (isTrivialStepAway(I, cbs::SgIdGlobalName))) {
           if (dontArrayifyValues(I, BaseInstAllocaMap, ContInstReplicaMap, AllocaIP,
                                  ReqdArrayElements, ContiguousIdx, VecInfo)) {
             HIPSYCL_DEBUG_INFO << "[SubCFG] Not arrayifying " << I << "\n";
@@ -1028,11 +1028,11 @@ void SubCFG::loadUniformAndRecalcContValues(
   llvm::Value *NewContIdx = VMap[ContiguousIdx];
   UniVMap[ContiguousIdx] = NewContIdx;
   auto& F = *this->LoadBB_->getParent();
-  if (HI.Level == HierarchicalLevel::CBS or HI.Level == HierarchicalLevel::H_CBS_SUBGROUP) {
+  if (HI.Level == HierarchicalLevel::CBS || HI.Level == HierarchicalLevel::H_CBS_SUBGROUP) {
     UniVMap[mergeGVLoadsInEntry(F, cbs::SgLocalIdGlobalName)] = VMap[mergeGVLoadsInEntry(F, cbs::SgLocalIdGlobalName)];
 
   }
-  if (HI.Level == HierarchicalLevel::CBS or HI.Level == HierarchicalLevel::H_CBS_GROUP) {
+  if (HI.Level == HierarchicalLevel::CBS || HI.Level == HierarchicalLevel::H_CBS_GROUP) {
     UniVMap[mergeGVLoadsInEntry(F, cbs::SgIdGlobalName)] = VMap[mergeGVLoadsInEntry(F, cbs::SgIdGlobalName)];
   }
 
@@ -1399,7 +1399,7 @@ llvm::GetElementPtrInst * createGEP(llvm::AllocaInst *Alloca,
 
   llvm::IRBuilder<> Builder(Before);
 
-  llvm::GetElementPtrInst *GEP = dyn_cast<llvm::GetElementPtrInst>(Builder.CreateGEP(
+  llvm::GetElementPtrInst *GEP = llvm::dyn_cast<llvm::GetElementPtrInst>(Builder.CreateGEP(
       Alloca->getAllocatedType(), Alloca, GEPArgs));
 
   assert(GEP != nullptr);
@@ -1439,7 +1439,7 @@ void arrayifyAllocas(llvm::BasicBlock *EntryBlock, llvm::DominatorTree &DT,
 #if USE_RV
             WLSubCfgInternal.push_back(Alloca);
 #else
-            if (HI.Level == HierarchicalLevel::H_CBS_SUBGROUP or HI.Level == HierarchicalLevel::CBS) {
+            if (HI.Level == HierarchicalLevel::H_CBS_SUBGROUP || HI.Level == HierarchicalLevel::CBS) {
               auto *MDWorkItemLoop = llvm::MDNode::get(
                   F.getContext(), {llvm::MDString::get(F.getContext(), MDKind::WorkItemLoop)});
               auto *MDAllocaProblem = llvm::MDNode::get(
@@ -1512,8 +1512,8 @@ void arrayifyAllocas(llvm::BasicBlock *EntryBlock, llvm::DominatorTree &DT,
           uint64_t NewStoreSize = layout.getTypeStoreSize(AllocType);
           assert(NewStoreSize == AlignedSize);
 
-        } else if (isa<llvm::StructType>(ElementType)) {
-          llvm::StructType *OldStruct = dyn_cast<llvm::StructType>(ElementType);
+        } else if (llvm::isa<llvm::StructType>(ElementType)) {
+          llvm::StructType *OldStruct = llvm::dyn_cast<llvm::StructType>(ElementType);
 
           llvm::ArrayType *StructPadding =
               llvm::ArrayType::get(llvm::Type::getInt8Ty(F.getContext()), RequiredExtraBytes);
@@ -1619,7 +1619,7 @@ private:
     std::pair<llvm::Value *, Shape> res{};
     if (auto [Storage, Type] = getOrCreateValue(Builder, SubCfg, Intrinsic, cont);
         Type == Shape::UNIFORM) {
-      if (not llvm::dyn_cast<llvm::Constant>(Storage)) {
+      if (!llvm::dyn_cast<llvm::Constant>(Storage)) {
         Storage = Builder.CreateLoad(Intrinsic.getFunctionType()->getReturnType(), Storage);
       }
       auto* SGIterations = [&]() {
@@ -1670,7 +1670,7 @@ private:
       return {Constant, Shape::UNIFORM};
     }
     auto *Load = llvm::dyn_cast<llvm::LoadInst>(Intrinsic.getOperand(0));
-    assert(Load and "Op0 must be load inst");
+    assert(Load && "Op0 must be load inst");
     // NOT UNIFORM
     if (auto *GEP = llvm::dyn_cast<llvm::GetElementPtrInst>(Load->getPointerOperand())) {
       auto *Storage = GEP->getPointerOperand();
@@ -1760,7 +1760,7 @@ class ReduceIntrinsic final : public CBSIntrinsic {
                                                         llvm::CallInst &Intrinsic, llvm::Value* NumberOfLoopIterationsLeft) override {
     auto *Idx = llvm::dyn_cast<llvm::ConstantInt>(Intrinsic.getOperand(1));
     auto *Type = Storage->getType();
-    assert(Idx and "Op must be constant int");
+    assert(Idx && "Op must be constant int");
     const auto v = Idx->getSExtValue();
     const bool isInt = Type->isIntegerTy();
     // min
@@ -1784,7 +1784,7 @@ class ReduceIntrinsic final : public CBSIntrinsic {
     }
     if (v == 1) {
       auto M = Intrinsic.getParent()->getParent()->getParent();
-      if (not isInt) {
+      if (!isInt) {
         auto *Pow =
             llvm::Intrinsic::getDeclaration(M, llvm::Intrinsic::powi, {Type, Builder.getInt32Ty()});
         llvm::Value *result = Storage;
@@ -1810,8 +1810,8 @@ class ReduceIntrinsic final : public CBSIntrinsic {
                                                  llvm::CallInst &Intrinsic) override {
     auto *Type = Intrinsic.getOperand(0)->getType();
     const auto *Idx = llvm::dyn_cast<llvm::ConstantInt>(Intrinsic.getOperand(1));
-    assert(Idx and "Op must be constant int");
-    assert(Type and "Must be integer type");
+    assert(Idx && "Op must be constant int");
+    assert(Type && "Must be integer type");
     const auto v = Idx->getSExtValue();
     if (Type->isIntegerTy()) {
       const bool isSigned = llvm::dyn_cast<llvm::IntegerType>(Type)->getSignBit() > 0;
@@ -1940,7 +1940,7 @@ template <bool Left> class Shift final : public CBSIntrinsic {
   std::pair<llvm::Value *, Shape> vectorizeValue(llvm::Instruction *VLoad, llvm::IRBuilder<> &Builder,
                                                  llvm::CallInst &Intrinsic) override {
     auto *Idx = Intrinsic.getOperand(1);
-    assert(Idx and "Op must be constant int");
+    assert(Idx && "Op must be constant int");
     if (const auto *Op1V = llvm::dyn_cast<llvm::ConstantInt>(Idx)) {
       std::array<int, SGSize> mask{};
       {
@@ -2194,7 +2194,7 @@ void formSubCfgGeneric(llvm::Function &F, llvm::LoopInfo &LI, llvm::DominatorTre
     HIPSYCL_DEBUG_INFO << "Create SubCFG from " << Barrier->getName() << "(" << Barrier
                        << ") id: " << Id << "\n";
     if (Id != ExitBarrierId) {
-      if (not Barrier->getSingleSuccessor()) {
+      if (!Barrier->getSingleSuccessor()) {
         if (HI.Level == HierarchicalLevel::H_CBS_SUBGROUP) {
           llvm::outs() << "SUB\n";
         }
@@ -2277,7 +2277,7 @@ void formSubCfgs(llvm::Function &F, llvm::LoopInfo &LI, llvm::DominatorTree &DT,
       state.SizeT, llvm::UndefValue::get(llvm::PointerType::get(state.SizeT, 0)));
 
   if constexpr (USE_RV) {
-    assert(not utils::hasSubBarriers(F, SAA));
+    assert(!utils::hasSubBarriers(F, SAA));
   }
 
   const bool PerformHCBS = utils::hasSubBarriers(F, SAA) or ALWAYS_CREATE_SUBGROUP_SUB_CFGS;
@@ -2446,11 +2446,11 @@ llvm::PreservedAnalyses SubCfgFormationPass::run(llvm::Function &F,
 
   formSubCfgs(F, LI, DT, PDT, *SAA, state);
 
-  if (not USE_RV and INCOMPLETE_SGS_OPT and (hasSubbarriers or ALWAYS_CREATE_SUBGROUP_SUB_CFGS)) {
+  if (!USE_RV && INCOMPLETE_SGS_OPT && (hasSubbarriers || ALWAYS_CREATE_SUBGROUP_SUB_CFGS)) {
     multiplyFunction(F, state);
   }
 
-  if (not IsSscp_) {
+  if (!IsSscp_) {
     // If we do not use SSCP, then we need to replace localSizes
     // In SSCP, the LocalSizeGlobalNames are replaced in a later pipeline stage
     const auto LocalSizes = loadLocalSizesFromAnnotations(F, state);

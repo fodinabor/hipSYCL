@@ -562,7 +562,7 @@ HIPSYCL_BUILTIN T __acpp_degrees(T x) noexcept {
   HIPSYCL_RETURN_DISPATCH_BUILTIN(__acpp_degrees, x);
 }
 
-// __acpp_max() and __acpp_min() are handled by the overloads from the
+// __acpp_max() && __acpp_min() are handled by the overloads from the
 // integer functions
 
 template<class T>

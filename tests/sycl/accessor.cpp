@@ -817,7 +817,7 @@ BOOST_AUTO_TEST_CASE(offset_2d) {
   std::fill(expected.begin(), expected.end(), 2);
   for (int i=0; i<N; ++i)
     for (int j=0; j<N; ++j)
-      if ((i < 2) or (j < 2))
+      if ((i < 2) || (j < 2))
         expected[i*N+j] = 1;
 
   BOOST_CHECK(data == expected);
@@ -859,7 +859,7 @@ BOOST_AUTO_TEST_CASE(offset_nested_subscript) {
   std::fill(expected.begin(), expected.end(), 2);
   for (int i=0; i<N; ++i)
     for (int j=0; j<N; ++j)
-      if ((i < 2) or (j < 2))
+      if ((i < 2) || (j < 2))
         expected[i*N+j] = 1;
 
   BOOST_CHECK(data == expected);

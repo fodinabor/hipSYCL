@@ -28,7 +28,7 @@ int main() {
             std::pair<int, size_t> v{acc[item.get_global_id()], item.get_global_id()};
 
             auto eval = [](std::pair<int, size_t> v1, std::pair<int, size_t> v2) {
-                    if (v1.first > v2.first or v1.first == v2.first and v1.second < v2.second)   {
+                    if (v1.first > v2.first || v1.first == v2.first && v1.second < v2.second)   {
                             return v1;
                     }
                     return v2;

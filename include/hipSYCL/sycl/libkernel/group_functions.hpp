@@ -104,7 +104,7 @@ HIPSYCL_BUILTIN T group_broadcast(Group g, T x, typename Group::id_type local_id
 // barrier
 template <class Group, std::enable_if_t<is_group_v<std::decay_t<Group>>, bool> = true>
 HIPSYCL_BUILTIN void group_barrier(Group g) {
-  if constexpr (std::is_same_v<Group, sub_group> and USE_RV) {
+  if constexpr (std::is_same_v<Group, sub_group> && USE_RV) {
     return;
   } else {
     HIPSYCL_DISPATCH_GROUP_ALGORITHM(__acpp_group_barrier, g);

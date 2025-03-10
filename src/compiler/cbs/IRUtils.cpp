@@ -46,7 +46,7 @@ namespace hipsycl::compiler::utils {
 using namespace hipsycl::compiler::cbs;
 
 bool isExtractIntrinsic(const llvm::Function *F) {
-  if (not F) {
+  if (!F) {
     return false;
   }
   return F->getName().contains("extract");
@@ -75,7 +75,7 @@ void eraseUseChain(llvm::Value *V) {
 
   AddAllUsersToWorkList(V);
 
-  while (not WorkList.empty()) {
+  while (! WorkList.empty()) {
     // Insertion took place
     if (auto *I = WorkList.pop_back_val(); ToErase.insert(I).second) {
       AddAllUsersToWorkList(I);

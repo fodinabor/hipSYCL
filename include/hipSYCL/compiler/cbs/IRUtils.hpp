@@ -32,6 +32,9 @@
 
 #include <llvm/Analysis/LoopInfo.h>
 #include <llvm/IR/Constants.h>
+#include <llvm/IR/Module.h>
+
+#include <string_view>
 
 namespace llvm {
 class Region;

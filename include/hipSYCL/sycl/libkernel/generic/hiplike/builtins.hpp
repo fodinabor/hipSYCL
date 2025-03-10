@@ -489,7 +489,7 @@ HIPSYCL_HIPLIKE_BUILTIN T __acpp_degrees(T x) noexcept {
   return (180.f / M_PI) * x;
 }
 
-// __acpp_max() and __acpp_min() are handled by the overloads from the
+// __acpp_max() && __acpp_min() are handled by the overloads from the
 // integer functions
 
 template<class T>

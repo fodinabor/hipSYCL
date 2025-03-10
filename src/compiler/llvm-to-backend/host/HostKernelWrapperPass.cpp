@@ -205,7 +205,7 @@ llvm::PreservedAnalyses HostKernelWrapperPass::run(llvm::Function &F,
   if (!SAA || !SAA->isKernelFunc(&F))
     return llvm::PreservedAnalyses::all();
 
-  if (KnownGroupSizeX and KnownGroupSizeY and KnownGroupSizeZ) {
+  if (KnownGroupSizeX && KnownGroupSizeY && KnownGroupSizeZ) {
     llvm::outs() << "SIZES: " << KnownGroupSizeX << ", " << KnownGroupSizeY << ", " << KnownGroupSizeZ << "\n";
     llvm::IRBuilder<> Bld(&F.getEntryBlock());
     const std::array arr{KnownGroupSizeX, KnownGroupSizeY, KnownGroupSizeZ};
