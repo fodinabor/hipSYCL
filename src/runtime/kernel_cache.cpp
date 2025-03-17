@@ -1,30 +1,13 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2018-2022 Aksel Alpay and contributors
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
+// SPDX-License-Identifier: BSD-2-Clause
 #include "hipSYCL/runtime/kernel_cache.hpp"
 #include "hipSYCL/common/debug.hpp"
 #include "hipSYCL/common/filesystem.hpp"
@@ -61,6 +44,15 @@ void for_each_exported_symbol_list(const common::hcf_container& hcf, F&& handler
   });
 }
 
+}
+
+extern "C" void __acpp_register_hcf(const char* hcf, std::size_t size) {
+  std::string hcf_data{hcf, size};
+  hcf_cache::get().register_hcf_object(common::hcf_container{hcf_data});
+}
+
+extern "C" void __acpp_unregister_hcf(std::size_t hcf_object_id) {
+  hcf_cache::get().unregister_hcf_object(hcf_object_id);
 }
 
 hcf_kernel_info::hcf_kernel_info(
@@ -118,6 +110,11 @@ hcf_kernel_info::hcf_kernel_info(
         if(entry.second == "1") {
           if(entry.first == "specialized") {
             _known_annotations.back().push_back(annotation_type::specialized);
+          } else if(entry.first == "fcall_specialized_config") {
+            _known_annotations.back().push_back(
+                annotation_type::fcall_specialized_config);
+          } else if(entry.first == "restrict") {
+            _known_annotations.back().push_back(annotation_type::noalias);
           } else {
             _string_annotations.back().push_back(entry.first);
           }
@@ -312,7 +309,7 @@ hcf_object_id hcf_cache::register_hcf_object(const common::hcf_container &obj) {
                 << " original index = "
                 << kernel_info->get_original_argument_index(i) << std::endl;
           }
-          _hcf_kernel_info[std::make_pair(id, kernel_name)] =
+          _hcf_kernel_info[generate_info_id(id, kernel_name)] =
               std::move(kernel_info);
         }
       }
@@ -327,7 +324,7 @@ hcf_object_id hcf_cache::register_hcf_object(const common::hcf_container &obj) {
           HIPSYCL_DEBUG_INFO << "hcf_cache: Registering image info for image "
                              << image_name << " from HCF object " << id
                              << std::endl;
-          _hcf_image_info[std::make_pair(id, image_name)] =
+          _hcf_image_info[generate_info_id(id, image_name)] =
               std::move(image_info);
         }
       }
@@ -403,19 +400,25 @@ const common::hcf_container* hcf_cache::get_hcf(hcf_object_id obj) const {
 
 const hcf_kernel_info *
 hcf_cache::get_kernel_info(hcf_object_id obj,
-                           const std::string &kernel_name) const {
+                           std::string_view kernel_name) const {
   std::lock_guard<std::mutex> lock{_mutex};
-  auto it = _hcf_kernel_info.find(std::make_pair(obj, kernel_name));
+  auto it = _hcf_kernel_info.find(generate_info_id(obj, kernel_name));
   if(it == _hcf_kernel_info.end())
     return nullptr;
   return it->second.get();
+}
+
+const hcf_kernel_info *
+hcf_cache::get_kernel_info(hcf_object_id obj,
+                           const std::string &kernel_name) const {
+  return get_kernel_info(obj, std::string_view{kernel_name});
 }
 
 const hcf_image_info *
 hcf_cache::get_image_info(hcf_object_id obj,
                           const std::string &image_name) const {
   std::lock_guard<std::mutex> lock{_mutex};
-  auto it = _hcf_image_info.find(std::make_pair(obj, image_name));
+  auto it = _hcf_image_info.find(generate_info_id(obj, image_name));
   if(it == _hcf_image_info.end())
     return nullptr;
   return it->second.get();
@@ -457,7 +460,23 @@ std::string kernel_cache::get_persistent_cache_file(code_object_id id_of_binary)
 
 bool kernel_cache::persistent_cache_lookup(code_object_id id_of_binary,
                                            std::string &out) const {
-  std::string filename = get_persistent_cache_file(id_of_binary);
+  std::string filename;
+
+  bool filename_lookup_succeeded =
+      common::filesystem::persistent_storage::get()
+          .get_this_app_db()
+          .read_access([&](const common::db::appdb_data &appdb) {
+            auto binary = appdb.binaries.find(id_of_binary);
+            if (binary == appdb.binaries.end())
+              return false;
+
+            filename = binary->second.jit_cache_filename;
+            return true;
+          });
+
+  if(!filename_lookup_succeeded)
+    return false;
+
   std::ifstream file{filename, std::ios::in | std::ios::binary | std::ios::ate};
 //  return false;
   if(!file.is_open())
@@ -492,6 +511,12 @@ void kernel_cache::persistent_cache_store(code_object_id id_of_binary,
         << "Could not store JIT result in persistent kernel cache in file "
         << filename << std::endl;
   }
+
+  common::filesystem::persistent_storage::get()
+      .get_this_app_db()
+      .read_write_access([&](common::db::appdb_data &appdb) {
+        appdb.binaries[id_of_binary].jit_cache_filename = filename;
+      });
 }
 
 } // rt

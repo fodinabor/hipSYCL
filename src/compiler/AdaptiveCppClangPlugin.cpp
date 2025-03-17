@@ -1,33 +1,18 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2019 Aksel Alpay
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
+// SPDX-License-Identifier: BSD-2-Clause
 #include "hipSYCL/common/config.hpp"
 
 #include "hipSYCL/compiler/FrontendPlugin.hpp"
 #include "hipSYCL/compiler/GlobalsPruningPass.hpp"
+#include "hipSYCL/compiler/SMCPCompatPass.hpp"
 #include "hipSYCL/compiler/cbs/PipelineBuilder.hpp"
 
 
@@ -48,6 +33,7 @@
 
 #ifdef HIPSYCL_WITH_REFLECTION_BUILTINS
 #include "hipSYCL/compiler/reflection/IntrospectStructPass.hpp"
+#include "hipSYCL/compiler/reflection/FunctionNameExtractionPass.hpp"
 #endif
 
 #include "clang/Frontend/FrontendPluginRegistry.h"
@@ -59,6 +45,7 @@
 
 #if LLVM_VERSION_MAJOR < 16
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
+#include "llvm/IR/LegacyPassManager.h"
 #endif
 
 namespace hipsycl {
@@ -78,20 +65,20 @@ public:
 };
 
 static llvm::cl::opt<bool> EnableLLVMSSCP{
-    "hipsycl-sscp", llvm::cl::init(false),
+    "acpp-sscp", llvm::cl::init(false),
     llvm::cl::desc{"Enable AdaptiveCpp LLVM SSCP compilation flow"}};
 
 static llvm::cl::opt<std::string> LLVMSSCPKernelOpts{
-    "hipsycl-sscp-kernel-opts", llvm::cl::init(""),
+    "acpp-sscp-kernel-opts", llvm::cl::init(""),
     llvm::cl::desc{
         "Specify compilation options to use when JIT-compiling AdaptiveCpp SSCP kernels"}};
 
 static llvm::cl::opt<bool> EnableStdPar{
-    "hipsycl-stdpar", llvm::cl::init(false),
+    "acpp-stdpar", llvm::cl::init(false),
     llvm::cl::desc{"Enable hipSYCL C++ standard parallelism support"}};
 
 static llvm::cl::opt<bool> StdparNoMallocToUSM{
-    "hipsycl-stdpar-no-malloc-to-usm", llvm::cl::init(false),
+    "acpp-stdpar-no-malloc-to-usm", llvm::cl::init(false),
     llvm::cl::desc{"Disable hipSYCL C++ standard parallelism malloc-to-usm compiler-side support"}};
 
 // Register and activate passes
@@ -153,12 +140,14 @@ extern "C" LLVM_ATTRIBUTE_WEAK ::llvm::PassPluginLibraryInfo llvmGetPassPluginIn
           // Note: for Clang < 12, this EP is not called for O0, but the new PM isn't
           // really used there anyways..
           PB.registerOptimizerLastEPCallback([](llvm::ModulePassManager &MPM, OptLevel) {
+            MPM.addPass(hipsycl::compiler::SMCPCompatPass{});
             MPM.addPass(hipsycl::compiler::GlobalsPruningPass{});
           });
 #ifdef HIPSYCL_WITH_REFLECTION_BUILTINS
           PB.registerPipelineStartEPCallback(
                 [&](llvm::ModulePassManager &MPM, OptLevel Level) {
                   MPM.addPass(IntrospectStructPass{});
+                  MPM.addPass(FunctionNameExtractionPass{});
                 });
 #endif
 

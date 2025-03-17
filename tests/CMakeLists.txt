@@ -4,6 +4,7 @@ project(adaptivecpp-tests)
 set(Boost_USE_STATIC_LIBS off)
 set(BUILD_SHARED_LIBS on)
 set(REDUCED_LOCAL_MEM_USAGE OFF CACHE BOOL "Only run tests with reduced local memory usage to allow running on hardware with little local memory.")
+set(ACPP_TEST_WORK_GROUP_SHUFFLE_EXT OFF CACHE BOOL "Enable work group shuffles tests that are an AdaptiveCpp extension.")
 
 find_package(Boost COMPONENTS unit_test_framework REQUIRED)
 
@@ -39,6 +40,9 @@ if(REDUCED_LOCAL_MEM_USAGE)
   add_definitions(-DREDUCED_LOCAL_MEM_USAGE)
 endif()
 
+if(ACPP_TEST_WORK_GROUP_SHUFFLE_EXT)
+  add_definitions(-DACPP_TEST_WORK_GROUP_SHUFFLE_EXT)
+endif()
 
 #Use add_definitions for now for older cmake versions
 cmake_policy(SET CMP0005 NEW)
@@ -103,7 +107,9 @@ add_executable(sycl_tests
   sycl/sycl_test_suite.cpp 
   sycl/usm.cpp
   sycl/vec.cpp
-  sycl/queue.cpp)
+  sycl/queue.cpp
+  sycl/multi_ptr.cpp
+)
 
 # Also test instant submission mode
 target_compile_definitions(sycl_tests PRIVATE -DACPP_ALLOW_INSTANT_SUBMISSION=1)
@@ -120,32 +126,39 @@ target_link_libraries(rt_tests PRIVATE Threads::Threads)
 add_sycl_to_target(TARGET rt_tests)
 
 # We cannot enable building them unconditionally at the moment,
-# because --hipsycl-stdpar is not compatible with all --hipsycl-targets
+# because --acpp-stdpar is not compatible with all --acpp-targets
 # values. Enabling them in all cases would break some existing test flows.
 if(WITH_PSTL_TESTS)
   add_executable(pstl_tests 
     pstl/pstl_test_suite.cpp
     pstl/std_math.cpp
+    pstl/std_atomic.cpp
     pstl/all_of.cpp
     pstl/any_of.cpp
     pstl/copy.cpp
     pstl/copy_if.cpp
     pstl/copy_n.cpp
+    pstl/exclusive_scan.cpp
     pstl/fill.cpp
     pstl/fill_n.cpp
     pstl/for_each.cpp
     pstl/for_each_n.cpp
     pstl/generate.cpp
     pstl/generate_n.cpp
+    pstl/inclusive_scan.cpp
     pstl/memory.cpp
+    pstl/merge.cpp
     pstl/none_of.cpp
     pstl/reduce.cpp
     pstl/replace.cpp
     pstl/replace_if.cpp
     pstl/replace_copy.cpp
     pstl/replace_copy_if.cpp
+    pstl/sort.cpp
     pstl/transform.cpp
     pstl/transform_reduce.cpp
+    pstl/transform_inclusive_scan.cpp
+    pstl/transform_exclusive_scan.cpp
     pstl/pointer_validation.cpp
     pstl/allocation_map.cpp
     pstl/free_space_map.cpp)

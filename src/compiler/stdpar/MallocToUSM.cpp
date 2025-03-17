@@ -1,34 +1,16 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2023 Aksel Alpay and contributors
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice,
- * this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
-
+// SPDX-License-Identifier: BSD-2-Clause
 #include "hipSYCL/compiler/stdpar/MallocToUSM.hpp"
 #include "hipSYCL/compiler/cbs/IRUtils.hpp"
+#include "hipSYCL/compiler/utils/LLVMUtils.hpp"
 
 
 
@@ -90,7 +72,7 @@ bool NameStartsWithItaniumIdentifier(llvm::StringRef Name, llvm::StringRef Ident
 
 bool isRestrictedToRegularMalloc(llvm::Function* F) {
   llvm::StringRef Name = F->getName();
-  if(!Name.startswith("_Z"))
+  if(!llvmutils::starts_with(Name, "_Z"))
     return false;
   
   if(NameStartsWithItaniumIdentifier(Name, "hipsycl"))
@@ -101,7 +83,9 @@ bool isRestrictedToRegularMalloc(llvm::Function* F) {
 
 bool isStdFunction(llvm::Function* F) {
   llvm::StringRef Name = F->getName();
-  if(Name.startswith("_ZNSt") || Name.startswith("_ZSt") || Name.startswith("_ZNKSt"))
+  if(llvmutils::starts_with(Name, "_ZNSt") ||
+     llvmutils::starts_with(Name, "_ZSt") ||
+     llvmutils::starts_with(Name, "_ZNKSt"))
     return true;
   return false;
 }
@@ -161,8 +145,45 @@ llvm::PreservedAnalyses MallocToUSMPass::run(llvm::Module &M, llvm::ModuleAnalys
 
   static constexpr const char* AllocIdentifier = "hipsycl_stdpar_alloc";
   static constexpr const char* FreeIdentifier = "hipsycl_stdpar_free";
+  // In principle we try to identify allocation/deallocation functions with clang::annotate
+  // attributes using AllocIdentifier/FreeIdentifier as identifiers.
+  // However, it seems that this is not reliable for all LLVM versions and compilation flows.
+  // (in particular, a failure was observed with LLVM 18 and --acpp-targets=omp).
+  // This issue is not yet fully understood. As a workaround, also statically define
+  // mangled names for alloc/free functions.
+  llvm::SmallSet<std::string, 16> KnownFreeFunctions;
+  llvm::SmallSet<std::string, 16> KnownAllocFunctions;
+  for (const auto &S :
+       {"_ZdaPvm", "_ZdaPv", "_ZdaPvRKSt9nothrow_t", "_ZdlPv", "_ZdlPvSt11align_val_t",
+        "_ZdaPvmSt11align_val_t", "_ZdlPvRKSt9nothrow_t", "_ZdlPvSt11align_val_tRKSt9nothrow_t",
+        "free", "_ZdlPvm", "_ZdaPvSt11align_val_t", "_ZdaPvSt11align_val_tRKSt9nothrow_t",
+        "_ZdlPvmSt11align_val_t"}) {
+    KnownFreeFunctions.insert(S);
+  }
+  for (const auto &S : {
+           "malloc",
+           "aligned_alloc",
+           "_ZnwmSt11align_val_tRKSt9nothrow_t",
+           "_ZnwmSt11align_val_t",
+           "_ZnamSt11align_val_tRKSt9nothrow_t",
+           "_ZnwmRKSt9nothrow_t",
+           "_ZnamSt11align_val_t",
+           "_Znam",
+           "_Znwm",
+           "_ZnamRKSt9nothrow_t",
+       }) {
+    KnownAllocFunctions.insert(S);
+  }
+
   llvm::SmallPtrSet<llvm::Function*, 16> ManagedAllocFunctions;
   llvm::SmallPtrSet<llvm::Function*, 16> ManagedFreeFunctions;
+
+  for(auto& F : M) {
+    if(KnownFreeFunctions.contains(F.getName().str()))
+      ManagedFreeFunctions.insert(&F);
+    if(KnownAllocFunctions.contains(F.getName().str()))
+      ManagedAllocFunctions.insert(&F);
+  }
 
   utils::findFunctionsWithStringAnnotations(M, [&](llvm::Function* F, llvm::StringRef Annotation){
     if(F) {
@@ -173,7 +194,7 @@ llvm::PreservedAnalyses MallocToUSMPass::run(llvm::Module &M, llvm::ModuleAnalys
         ManagedAllocFunctions.insert(F);
         
       }
-      if(Annotation.compare(FreeIdentifier) == 0) {
+      if (Annotation.compare(FreeIdentifier) == 0) {
         ManagedFreeFunctions.insert(F);
       }
     }
@@ -311,7 +332,7 @@ llvm::PreservedAnalyses MallocToUSMPass::run(llvm::Module &M, llvm::ModuleAnalys
   // Internalize memory management definitions
   for(auto* F: ManagedFreeFunctions)
     F->setLinkage(llvm::GlobalValue::LinkOnceODRLinkage);
-
+    
   // Ideally, we could insert an ABI tag for every function that uses USM, such that external
   // libraries do not ODR-resolve symbols to functions using USM when the libraries have not
   // been compiled by us and then cannot free the USM pointers.

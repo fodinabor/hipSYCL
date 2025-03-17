@@ -1,31 +1,13 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2018-2021 Aksel Alpay and contributors
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
-
+// SPDX-License-Identifier: BSD-2-Clause
 #ifndef HIPSYCL_HANDLER_HPP
 #define HIPSYCL_HANDLER_HPP
 
@@ -74,8 +56,17 @@
 #include "hipSYCL/algorithms/util/memory_streaming.hpp"
 #include "hipSYCL/algorithms/util/allocation_cache.hpp"
 
+#ifndef ACPP_FORCE_INSTANT_SUBMISSION
+#define ACPP_FORCE_INSTANT_SUBMISSION 0
+#endif
+
 #if defined(HIPSYCL_ALLOW_INSTANT_SUBMISSION) && !defined(ACPP_ALLOW_INSTANT_SUBMISSION)
 #define ACPP_ALLOW_INSTANT_SUBMISSION HIPSYCL_ALLOW_INSTANT_SUBMISSION
+#endif
+
+#if ACPP_FORCE_INSTANT_SUBMISSION
+#undef ACPP_ACPP_ALLOW_INSTANT_SUBMISSION
+#define ACPP_ACPP_ALLOW_INSTANT_SUBMISSION 1
 #endif
 
 #ifndef ACPP_ALLOW_INSTANT_SUBMISSION
@@ -732,7 +723,7 @@ public:
 
     auto custom_kernel_op = rt::make_operation<rt::kernel_operation>(
         typeid(f).name(),
-        glue::make_kernel_launchers<class _unnamed, rt::kernel_type::custom>(
+        glue::make_kernel_launcher<class _unnamed, rt::kernel_type::custom>(
             sycl::id<3>{}, sycl::range<3>{}, 
             sycl::range<3>{},
             0, f),
@@ -826,8 +817,16 @@ private:
       // buffers for buffer-accessor reductions
       for(const rt::dag_node_ptr& req : _requirements.get()) {
         auto* op = req->get_operation();
-        if(op->is_requirement())
-          req_list.add_node_requirement(req);
+        if(op->is_requirement()) {
+          auto cloned_op =
+              static_cast<rt::requirement *>(op)->clone_requirement(true);
+
+          req_list.add_requirement(std::move(cloned_op));
+        } else {
+          // Other dependencies that are not requirements should be
+          // covered by the dependency to the previous node that we add
+          // before this for loop.
+        }
       }
       
       previous_event =
@@ -906,8 +905,6 @@ private:
     static_assert(sizeof...(reductions) > 0,
                   "Overload resolution should never pick this overload without "
                   "reductions");
-
-    this->_operation_uses_reductions = true;
 
     if constexpr(KernelType == rt::kernel_type::ndrange_parallel_for) {
       _command_group_nodes.push_back(
@@ -999,7 +996,7 @@ private:
 
     auto kernel_op = rt::make_operation<rt::kernel_operation>(
         typeid(KernelFuncType).name(),
-        glue::make_kernel_launchers<KernelName, KernelType>(
+        glue::make_kernel_launcher<KernelName, KernelType>(
             offset, local_range, global_range, local_mem_size, f),
         _requirements);
 
@@ -1008,7 +1005,7 @@ private:
 
     // This registers the kernel with the runtime when the application
     // launches, and allows us to introspect available kernels.
-    HIPSYCL_STATIC_KERNEL_REGISTRATION(KernelFuncType);
+    ACPP_STATIC_KERNEL_REGISTRATION(KernelFuncType);
 
     return node;
   }
@@ -1122,6 +1119,10 @@ private:
   const rt::node_list_t& get_cg_nodes() const
   { return _command_group_nodes; }
 
+  bool contains_non_instant_nodes() const {
+    return _contains_non_instant_nodes;
+  }
+
   
   handler(const context &ctx, async_handler handler,
           const rt::execution_hints &hints, rt::runtime* rt,
@@ -1130,7 +1131,6 @@ private:
       : _ctx{ctx}, _handler{handler}, _execution_hints{hints},
         _preferred_group_size1d{}, _preferred_group_size2d{},
         _preferred_group_size3d{}, _rt{rt}, _requirements{rt},
-        _kernel_cache{rt::kernel_cache::get()},
         _allocation_cache{cache},
         _most_recent_reduction_kernel{most_recent_reduction_kernel}{}
 
@@ -1163,7 +1163,7 @@ private:
 
 
   rt::dag_node_ptr create_task(std::unique_ptr<rt::operation> op,
-                               rt::execution_hints &hints,
+                               const rt::execution_hints &hints,
                                const rt::requirements_list& requirements) {
 
     bool uses_buffers = false;
@@ -1189,20 +1189,28 @@ private:
 
     if (!ACPP_ALLOW_INSTANT_SUBMISSION || uses_buffers ||
         has_non_instant_dependency || is_unbound ||
-        !is_dedicated_in_order_queue || _operation_uses_reductions ||
+        !is_dedicated_in_order_queue ||
         op->is_requirement()) {
+#if ACPP_FORCE_INSTANT_SUBMISSION
+      throw exception{make_error_code(errc::invalid), "Instant submission not possible, "
+          "but application was built with ACPP_FORCE_INSTANT_SUBMISSION=1"};
+#else
       // traditional submission
       rt::dag_build_guard build{_rt->dag()};
+      _contains_non_instant_nodes = true;
+
       return build.builder()->add_command_group(std::move(op), requirements, hints);
+#endif
     } else {
-      // instant submission
-      hints.set_hint(rt::hints::instant_execution{});
 
       rt::dag_node_ptr node = std::make_shared<rt::dag_node>(
           hints, requirements.get(), std::move(op), _rt);
       node->assign_to_device(
           hints.get_hint<rt::hints::bind_to_device>()->get_device_id());
       node->assign_to_executor(executor);
+      // Remember this was instant submission
+      node->get_execution_hints().set_hint(rt::hints::instant_execution{});
+
       executor->submit_directly(node, node->get_operation(), requirements.get());
       // Signal that instrumentation setup phase is complete
       node->get_operation()->get_instrumentations().mark_set_complete();
@@ -1211,7 +1219,7 @@ private:
   }
 
   rt::dag_node_ptr create_task(std::unique_ptr<rt::operation> op,
-                               rt::execution_hints &hints) {
+                               const rt::execution_hints &hints) {
     return create_task(std::move(op), hints, _requirements);
   }
 
@@ -1220,7 +1228,7 @@ private:
   async_handler _handler;
 
   rt::requirements_list _requirements;
-  rt::execution_hints _execution_hints;
+  const rt::execution_hints& _execution_hints;
   rt::node_list_t _command_group_nodes;
 
   range<1> _preferred_group_size1d;
@@ -1229,9 +1237,8 @@ private:
 
   rt::runtime* _rt;
 
-  bool _operation_uses_reductions = false;
+  bool _contains_non_instant_nodes = false;
 
-  std::shared_ptr<rt::kernel_cache> _kernel_cache;
   algorithms::util::allocation_cache* _allocation_cache;
 
   std::weak_ptr<rt::dag_node>* _most_recent_reduction_kernel;

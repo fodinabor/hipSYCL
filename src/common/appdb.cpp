@@ -1,33 +1,17 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2022 Aksel Alpay and contributors
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
+// SPDX-License-Identifier: BSD-2-Clause
 #include "hipSYCL/common/debug.hpp"
 #include "hipSYCL/common/appdb.hpp"
 #include "hipSYCL/common/filesystem.hpp"
+#include "hipSYCL/runtime/kernel_configuration.hpp"
 #include <fstream>
 #include <type_traits>
 
@@ -73,20 +57,41 @@ void kernel_arg_entry::dump(std::ostream& ostr, int indentation_level) const {
 void kernel_entry::dump(std::ostream& ostr, int indentation_level) const {
   print_key_value_pair(ostr, "num_registered_invocations",
                        num_registered_invocations, indentation_level);
+  print_array(ostr, "retained_argument_indices", retained_argument_indices,
+              "int", indentation_level);
   print_array(ostr, "kernel_args", kernel_args, "arg_entry", indentation_level);
+  print_key_value_pair(ostr, "first_invocation_run",
+                       first_iads_invocation_run, indentation_level);
+}
+
+void binary_entry::dump(std::ostream& ostr, int indentation_level) const {
+  print_key_value_pair(ostr, "jit_cache_filename", jit_cache_filename,
+                       indentation_level);
 }
 
 void appdb_data::dump(std::ostream& ostr, int indentation_level) const {
   print_key_value_pair(ostr, "content_version", content_version, indentation_level);
+  
+  auto get_id_string = [](const rt::kernel_configuration::id_type& id) {
+    std::string kernel_name = std::to_string(id[0]);
+    for(int i = 1; i < id.size(); ++i)
+      kernel_name += "." + std::to_string(id[i]); 
+    return kernel_name;
+  };
+  
   print_key_value_pair(ostr, "kernels", "<map>", indentation_level);
 
   for(const auto& entry : kernels) {
-    std::string kernel_name = std::to_string(entry.first[0]);
-    for(int i = 1; i < entry.first.size(); ++i)
-      kernel_name += "-" + std::to_string(entry.first[i]);
-
+    std::string kernel_name = get_id_string(entry.first);
     print_key_value_pair(ostr, kernel_name, "<kernel-entry>", indentation_level+1);
-    
+    entry.second.dump(ostr, indentation_level+2);
+  }
+
+  print_key_value_pair(ostr, "binaries", "<map>", indentation_level);
+
+  for(const auto& entry : binaries) {
+    std::string binary_name = get_id_string(entry.first);
+    print_key_value_pair(ostr, binary_name, "<binary-entry>", indentation_level+1);
     entry.second.dump(ostr, indentation_level+2);
   }
 }

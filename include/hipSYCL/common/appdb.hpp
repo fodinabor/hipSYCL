@@ -1,30 +1,13 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2022 Aksel Alpay and contributors
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
+// SPDX-License-Identifier: BSD-2-Clause
 #ifndef HIPSYCL_COMMON_APP_DB_HPP
 #define HIPSYCL_COMMON_APP_DB_HPP
 
@@ -41,9 +24,9 @@
 namespace hipsycl::common::db {
 
 struct kernel_arg_value_statistics {
-  uint64_t value; // The kernel argument value
-  uint64_t count; // How many times we have seen this value
-  uint64_t last_used; // The number of the kernel invocation where this value
+  uint64_t value = 0; // The kernel argument value
+  uint64_t count = 0; // How many times we have seen this value
+  uint64_t last_used = 0; // The number of the kernel invocation where this value
                       // was last used
 
   void dump(std::ostream& ostr, int indentation_level=0) const;
@@ -77,12 +60,32 @@ struct kernel_entry {
   void pack(T &pack) {
     pack(kernel_args);
     pack(num_registered_invocations);
+    pack(retained_argument_indices);
+    pack(first_iads_invocation_run);
   }
 
   void dump(std::ostream& ostr, int indentation_level=0) const;
 
   std::vector<kernel_arg_entry> kernel_args;
-  std::size_t num_registered_invocations;
+  std::size_t num_registered_invocations = 0;
+  std::vector<int> retained_argument_indices;
+
+  // It seems there is a bug in msgpack serializing
+  // std::numeric_limits<size_t>::max(). So we use 1 << 63
+  // to denote an unset/invalid value.
+  static constexpr uint64_t no_usage = 1ull << 63;
+  uint64_t first_iads_invocation_run = no_usage;
+};
+
+struct binary_entry {
+  std::string jit_cache_filename;
+
+  template<class T>
+  void pack(T &pack) {
+    pack(jit_cache_filename);
+  }
+
+  void dump(std::ostream& ostr, int indentation_level=0) const;
 };
 
 struct appdb_data {
@@ -91,10 +94,14 @@ struct appdb_data {
   std::unordered_map<rt::kernel_configuration::id_type, kernel_entry,
                      rt::kernel_id_hash>
       kernels;
+  std::unordered_map<rt::kernel_configuration::id_type, binary_entry,
+                     rt::kernel_id_hash>
+      binaries;
 
   template<class T>
   void pack(T &pack) {
     pack(kernels);
+    pack(binaries);
     pack(content_version);
   }
 
@@ -106,22 +113,22 @@ class appdb  {
 public:
   // DO NOT FORGET TO INCREMENT THIS WHEN ADDING/REMOVING
   // FIELDS OR OTHERWISE CHANGING THE DATA LAYOUT!
-  static const uint64_t format_version = 1;
+  static const uint64_t format_version = 4;
 
   appdb(const std::string& db_path);
   ~appdb();
 
   template<class F>
-  void read_access(F&& handler) const{
+  auto read_access(F&& handler) const{
     read_lock lock {_lock};
-    handler(_data);
+    return handler(_data);
   }
 
   template<class F>
-  void read_write_access(F&& handler) {
+  auto read_write_access(F&& handler) {
     write_lock lock {_lock};
-    handler(_data);
     _was_modified = true;
+    return handler(_data);
   }
 
 private:

@@ -1,30 +1,13 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2021 Aksel Alpay
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
+// SPDX-License-Identifier: BSD-2-Clause
 #ifndef HIPSYCL_ATOMIC_HIPLIKE_BUILTINS_HPP
 #define HIPSYCL_ATOMIC_HIPLIKE_BUILTINS_HPP
 
@@ -34,8 +17,9 @@
 
 #include <type_traits>
 
-#if HIPSYCL_LIBKERNEL_IS_DEVICE_PASS_CUDA ||                                   \
-    HIPSYCL_LIBKERNEL_IS_DEVICE_PASS_HIP
+
+#if ACPP_LIBKERNEL_IS_DEVICE_PASS_CUDA ||                                   \
+    ACPP_LIBKERNEL_IS_DEVICE_PASS_HIP
 
 namespace hipsycl {
 namespace sycl {
@@ -57,10 +41,62 @@ inline constexpr int builtin_memory_order(memory_order o) noexcept {
   return __ATOMIC_RELAXED;
 }
 
+#if ACPP_LIBKERNEL_IS_DEVICE_PASS_CUDA && !defined(ACPP_LIBKERNEL_CUDA_NVCXX)
+ #define ACPP_NEEDS_CUDA_ATOMIC_WORKAROUNDS
+#endif
+
+#ifdef ACPP_NEEDS_CUDA_ATOMIC_WORKAROUNDS
+// LLVM NVPTX backend does currently not properly support acquire/release
+// atomics. We workaround this for two load/store instructions that we
+// need for the algorithms library using inline assembly.
+__attribute__((always_inline)) 
+HIPSYCL_HIPLIKE_BUILTIN
+void __acpp_cuda_atomic_store_device_rel_i32(int32_t *ptr, int32_t x) {
+#if __CUDA_ARCH__ < 700
+  __threadfence();
+  *ptr = x;
+  __threadfence();
+#else
+  asm volatile("st.release.gpu.s32 [%0], %1;"
+              :
+              :"l"(ptr), "r"(x)
+              : "memory");
+#endif
+}
+
+__attribute__((always_inline))
+HIPSYCL_HIPLIKE_BUILTIN
+int32_t __acpp_cuda_atomic_load_device_acq_i32(int32_t *ptr) {
+#if __CUDA_ARCH__ < 700
+  __threadfence();
+  int32_t res = *ptr;
+  __threadfence();
+  return res;
+#else
+  int32_t result;
+  asm volatile("ld.acquire.gpu.u32 %0,[%1];"
+                : "=r"(result)
+                : "l"(ptr)
+                : "memory");
+  return result;  
+#endif
+}
+
+#endif
+
 template <access::address_space S, class T>
 HIPSYCL_HIPLIKE_BUILTIN void
 __acpp_atomic_store(T *addr, T x, memory_order order,
                        memory_scope scope) noexcept {
+  if constexpr(sizeof(T) == sizeof(int32_t)) {
+#ifdef ACPP_NEEDS_CUDA_ATOMIC_WORKAROUNDS
+    if(scope == memory_scope::device && order == memory_order::release){
+      __acpp_cuda_atomic_store_device_rel_i32(reinterpret_cast<int32_t*>(addr),
+                                              bit_cast<int32_t>(x));
+      return;
+    }
+#endif
+  }
   __atomic_store_n(addr, x, builtin_memory_order(order));
 }
 
@@ -83,6 +119,14 @@ __acpp_atomic_store(double *addr, double x, memory_order order,
 template <access::address_space S, class T>
 HIPSYCL_HIPLIKE_BUILTIN T __acpp_atomic_load(T *addr, memory_order order,
                                                 memory_scope scope) noexcept {
+  if constexpr(sizeof(T) == sizeof(int32_t)) {
+#ifdef ACPP_NEEDS_CUDA_ATOMIC_WORKAROUNDS
+    if(scope == memory_scope::device && order == memory_order::acquire){
+      return bit_cast<T>(__acpp_cuda_atomic_load_device_acq_i32(
+          reinterpret_cast<int32_t*>(addr)));
+    }
+#endif
+  }
   return __atomic_load_n(addr, builtin_memory_order(order));
 }
 
@@ -285,8 +329,9 @@ HIPSYCL_HIPLIKE_BUILTIN bool __acpp_atomic_compare_exchange_weak(
 // *********************** Integral values only *****************************
 
 // Defines overloads for integral atomics for types that are not natively
-// supported using bitcasts: long long, long and unsigned long
-#define HIPSYCL_DEFINE_HIPLIKE_ATOMIC_INTEGRAL_NONNATIVE_OVERLOADS(            \
+// supported using bitcasts (long long, long and unsigned long), for operations
+// that are agnostic to the sign of the operands (e.g. atomicAdd).
+#define HIPSYCL_DEFINE_HIPLIKE_ATOMIC_INTEGRAL_NONNATIVE_OVERLOADS_AGNOSTIC(   \
     name, bitcast_name)                                                        \
   template <access::address_space S, class InvokedT, class T>                  \
   HIPSYCL_HIPLIKE_BUILTIN T bitcast_name(T *addr, T x, memory_order order,     \
@@ -320,6 +365,37 @@ HIPSYCL_HIPLIKE_BUILTIN bool __acpp_atomic_compare_exchange_weak(
     }                                                                          \
   }
 
+// Defines overloads for integral atomics for types that are not natively
+// supported using bitcasts (long and unsigned long), for operations
+// where the sign of the operands matters (e.g. atomicMin).
+#define HIPSYCL_DEFINE_HIPLIKE_ATOMIC_INTEGRAL_NONNATIVE_OVERLOADS_SIGNED(     \
+    name, bitcast_name)                                                        \
+  template <access::address_space S, class InvokedT, class T>                  \
+  HIPSYCL_HIPLIKE_BUILTIN T bitcast_name(T *addr, T x, memory_order order,     \
+                                         memory_scope scope) noexcept {        \
+    return bit_cast<T>(name<S>(reinterpret_cast<InvokedT *>(addr),             \
+                               bit_cast<InvokedT>(x), order, scope));          \
+  }                                                                            \
+  template <access::address_space S>                                           \
+  HIPSYCL_HIPLIKE_BUILTIN long name(long *addr, long x, memory_order order,    \
+                                    memory_scope scope) noexcept {             \
+    if constexpr (sizeof(long) == 4) {                                         \
+      return bitcast_name<S, int>(addr, x, order, scope);                      \
+    } else {                                                                   \
+      return bitcast_name<S, long long>(addr, x, order, scope);       \
+    }                                                                          \
+  }                                                                            \
+  template <access::address_space S>                                           \
+  HIPSYCL_HIPLIKE_BUILTIN unsigned long name(                                  \
+      unsigned long *addr, unsigned long x, memory_order order,                \
+      memory_scope scope) noexcept {                                           \
+    if constexpr (sizeof(long) == 4) {                                         \
+      return bitcast_name<S, unsigned int>(addr, x, order, scope);             \
+    } else {                                                                   \
+      return bitcast_name<S, unsigned long long>(addr, x, order, scope);       \
+    }                                                                          \
+  }
+
 // ******************** atomic fetch and ************************
 
 template <access::address_space S, class T>
@@ -328,7 +404,7 @@ HIPSYCL_HIPLIKE_BUILTIN T __acpp_atomic_fetch_and(
   return atomicAnd(addr, x);
 }
 
-HIPSYCL_DEFINE_HIPLIKE_ATOMIC_INTEGRAL_NONNATIVE_OVERLOADS(
+HIPSYCL_DEFINE_HIPLIKE_ATOMIC_INTEGRAL_NONNATIVE_OVERLOADS_AGNOSTIC(
     __acpp_atomic_fetch_and, __acpp_bitcast_atomic_fetch_and);
 
 // ************************ atomic fetch or **********************
@@ -340,7 +416,7 @@ HIPSYCL_HIPLIKE_BUILTIN T __acpp_atomic_fetch_or(T *addr, T x, memory_order orde
    return atomicOr(addr, x);
 }
 
-HIPSYCL_DEFINE_HIPLIKE_ATOMIC_INTEGRAL_NONNATIVE_OVERLOADS(
+HIPSYCL_DEFINE_HIPLIKE_ATOMIC_INTEGRAL_NONNATIVE_OVERLOADS_AGNOSTIC(
     __acpp_atomic_fetch_or, __acpp_bitcast_atomic_fetch_or);
 
 // ************************ atomic fetch xor **********************
@@ -351,7 +427,7 @@ HIPSYCL_HIPLIKE_BUILTIN T __acpp_atomic_fetch_xor(T *addr, T x, memory_order ord
    return atomicXor(addr, x);
 }
 
-HIPSYCL_DEFINE_HIPLIKE_ATOMIC_INTEGRAL_NONNATIVE_OVERLOADS(
+HIPSYCL_DEFINE_HIPLIKE_ATOMIC_INTEGRAL_NONNATIVE_OVERLOADS_AGNOSTIC(
     __acpp_atomic_fetch_xor, __acpp_bitcast_atomic_fetch_xor);
 
 // ***************** Floating point and integral values *************
@@ -367,7 +443,7 @@ HIPSYCL_HIPLIKE_BUILTIN T __acpp_atomic_fetch_add(
 
 // atomicAdd supports float and double, so we only need to complete the integral
 // overload set
-HIPSYCL_DEFINE_HIPLIKE_ATOMIC_INTEGRAL_NONNATIVE_OVERLOADS(
+HIPSYCL_DEFINE_HIPLIKE_ATOMIC_INTEGRAL_NONNATIVE_OVERLOADS_AGNOSTIC(
     __acpp_atomic_fetch_add, __acpp_bitcast_atomic_fetch_add);
 
 // *********************** atomic sub ****************************
@@ -434,11 +510,18 @@ __acpp_atomic_fetch_sub(unsigned long *addr, unsigned long x,
 template <access::address_space S, class T>
 HIPSYCL_HIPLIKE_BUILTIN T __acpp_atomic_fetch_min(
     T *addr, T x, memory_order order, memory_scope scope) noexcept {
+#if defined(__HIP__)
+  // HIP does not support some of the overloads of atomicMin until ROCm 5.7
+  // https://github.com/ROCm/clr/issues/2
+  return __hip_atomic_fetch_min(addr, x, builtin_memory_order(order),
+      __HIP_MEMORY_SCOPE_AGENT);
+#else
   return atomicMin(addr, x);
+#endif
 }
 
 // Need completion of integral overload set
-HIPSYCL_DEFINE_HIPLIKE_ATOMIC_INTEGRAL_NONNATIVE_OVERLOADS(
+HIPSYCL_DEFINE_HIPLIKE_ATOMIC_INTEGRAL_NONNATIVE_OVERLOADS_SIGNED(
     __acpp_atomic_fetch_min, __acpp_bitcast_atomic_fetch_min);
 
 // Need CAS loop for emulation of floating point overloads
@@ -473,11 +556,18 @@ __acpp_atomic_fetch_min(double *addr, double x, memory_order order,
 template <access::address_space S, class T>
 HIPSYCL_HIPLIKE_BUILTIN T __acpp_atomic_fetch_max(
     T *addr, T x, memory_order order, memory_scope scope) noexcept {
+#if defined(__HIP__)
+  // HIP does not support some of the overloads of atomicMax until ROCm 5.7
+  // https://github.com/ROCm/clr/issues/2
+  return __hip_atomic_fetch_max(addr, x, builtin_memory_order(order),
+      __HIP_MEMORY_SCOPE_AGENT);
+#else
   return atomicMax(addr, x);
+#endif
 }
 
 // Need completion of integral overload set
-HIPSYCL_DEFINE_HIPLIKE_ATOMIC_INTEGRAL_NONNATIVE_OVERLOADS(
+HIPSYCL_DEFINE_HIPLIKE_ATOMIC_INTEGRAL_NONNATIVE_OVERLOADS_SIGNED(
     __acpp_atomic_fetch_max, __acpp_bitcast_atomic_fetch_max);
 
 // Need CAS loop for emulation of floating point overloads
@@ -509,6 +599,8 @@ __acpp_atomic_fetch_max(double *addr, double x, memory_order order,
 }
 }
 }
+
+#undef ACPP_NEEDS_CUDA_ATOMIC_WORKAROUNDS
 
 #endif
 

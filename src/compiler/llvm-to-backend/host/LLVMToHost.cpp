@@ -1,34 +1,18 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2019-2024 Aksel Alpay
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
+// SPDX-License-Identifier: BSD-2-Clause
 #include "hipSYCL/compiler/llvm-to-backend/host/LLVMToHost.hpp"
 
 #include "hipSYCL/common/debug.hpp"
 #include "hipSYCL/common/filesystem.hpp"
+#include "hipSYCL/compiler/utils/LLVMUtils.hpp"
 #include "hipSYCL/compiler/cbs/IRUtils.hpp"
 #include "hipSYCL/compiler/cbs/KernelFlattening.hpp"
 #include "hipSYCL/compiler/cbs/PipelineBuilder.hpp"
@@ -39,7 +23,7 @@
 #include "hipSYCL/compiler/llvm-to-backend/Utils.hpp"
 #include "hipSYCL/compiler/llvm-to-backend/host/HostKernelWrapperPass.hpp"
 #include "hipSYCL/compiler/sscp/IRConstantReplacer.hpp"
-#include "hipSYCL/glue/llvm-sscp/s2_ir_constants.hpp"
+#include "hipSYCL/glue/llvm-sscp/jit-reflection/queries.hpp"
 #include "hipSYCL/RV.h"
 
 #include <llvm/ADT/SmallVector.h>
@@ -77,7 +61,8 @@ namespace hipsycl {
 namespace compiler {
 
 LLVMToHostTranslator::LLVMToHostTranslator(const std::vector<std::string> &KN)
-    : LLVMToBackendTranslator{sycl::jit::backend::host, KN, KN}, KernelNames{KN} {}
+    : LLVMToBackendTranslator{static_cast<int>(sycl::AdaptiveCpp_jit::compiler_backend::host), KN, KN},
+      KernelNames{KN} {}
 
 bool LLVMToHostTranslator::toBackendFlavor(llvm::Module &M, PassHandler &PH) {
 
@@ -107,6 +92,16 @@ bool LLVMToHostTranslator::toBackendFlavor(llvm::Module &M, PassHandler &PH) {
   if (!this->linkBitcodeFile(M, BuiltinBitcodeFile))
     return false;
 
+  // Internalize all constant global variables that don't their definition
+  // to be imported from external sources - this is fine because llvm-to-backend
+  // lowering always happens *after* linking in all dependencies, and therefore
+  // no symbols need to be exported to other TUs, ever.
+  for(auto& GV : M.globals()) {
+    if (GV.isConstant() && GV.hasInitializer() &&
+        !llvmutils::starts_with(GV.getName(), "__acpp_cbs"))
+      GV.setLinkage(llvm::GlobalValue::LinkageTypes::InternalLinkage);
+  }
+
   llvm::ModulePassManager MPM;
   PH.ModuleAnalysisManager->clear(); // for some reason we need to reset the analyses... otherwise
                                      // we get a crash at IPSCCP
@@ -118,7 +113,6 @@ bool LLVMToHostTranslator::toBackendFlavor(llvm::Module &M, PassHandler &PH) {
   registerCBSPipeline(MPM, hipsycl::compiler::OptLevel::O3, true);
 
   llvm::FunctionPassManager FPM;
-
   FPM.addPass(HostKernelWrapperPass{KnownLocalMemSize, KnownGroupSizeX, KnownGroupSizeY, KnownGroupSizeZ});
   MPM.addPass(llvm::createModuleToFunctionPassAdaptor(std::move(FPM)));
 
@@ -129,8 +123,8 @@ bool LLVMToHostTranslator::toBackendFlavor(llvm::Module &M, PassHandler &PH) {
 
 bool LLVMToHostTranslator::translateToBackendFormat(llvm::Module &FlavoredModule,
                                                     std::string &out) {
-  auto InputFile = llvm::sys::fs::TempFile::create("hipsycl-sscp-host-%%%%%%.bc");
-  auto OutputFile = llvm::sys::fs::TempFile::create("hipsycl-sscp-host-%%%%%%.so");
+  auto InputFile = llvm::sys::fs::TempFile::create("acpp-sscp-host-%%%%%%.bc");
+  auto OutputFile = llvm::sys::fs::TempFile::create("acpp-sscp-host-%%%%%%.so");
 
   if (auto E = InputFile.takeError()) {
     this->registerError("LLVMToHost: Could not create temp file: " + InputFile->TmpName);
@@ -142,16 +136,8 @@ bool LLVMToHostTranslator::translateToBackendFormat(llvm::Module &FlavoredModule
     return false;
   }
 
-  std::string OutputFilename = OutputFile->TmpName;
-
-  AtScopeExit DestroyInputFile([&]() {
-    if (InputFile->discard())
-      ;
-  });
-  AtScopeExit DestroyOutputFile([&]() {
-    if (OutputFile->discard())
-      ;
-  });
+  AtScopeExit DestroyInputFile([&]() { consumeError(std::move(InputFile->discard())); });
+  AtScopeExit DestroyOutputFile([&]() { consumeError(std::move(OutputFile->discard())); });
 
   std::error_code EC;
   llvm::raw_fd_ostream InputStream{InputFile->FD, false};
@@ -177,7 +163,7 @@ bool LLVMToHostTranslator::translateToBackendFormat(llvm::Module &FlavoredModule
       "-fpass-plugin=/usr/local/lib/RVPLUG.so",
 #endif
       "-o",
-      OutputFilename,
+      OutputFile->TmpName,
 #if USE_RV
       "-mllvm",
       "-rv",
@@ -240,6 +226,10 @@ AddressSpaceMap LLVMToHostTranslator::getAddressSpaceMap() const {
 std::unique_ptr<LLVMToBackendTranslator>
 createLLVMToHostTranslator(const std::vector<std::string> &KernelNames) {
   return std::make_unique<LLVMToHostTranslator>(KernelNames);
+}
+
+void LLVMToHostTranslator::migrateKernelProperties(llvm::Function *From, llvm::Function *To) {
+  assert(false && "migrateKernelProperties is unsupport for LLVMToHost");
 }
 
 } // namespace compiler

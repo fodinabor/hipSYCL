@@ -1,33 +1,17 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2019-2022 Aksel Alpay
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
+// SPDX-License-Identifier: BSD-2-Clause
 
 
-#ifndef HIPSYCL_LIBKERNEL_SSCP_BUILTINS_HPP
-#define HIPSYCL_LIBKERNEL_SSCP_BUILTINS_HPP
+#ifndef ACPP_LIBKERNEL_SSCP_BUILTINS_HPP
+#define ACPP_LIBKERNEL_SSCP_BUILTINS_HPP
 
 #include "hipSYCL/sycl/libkernel/backend.hpp"
 
@@ -41,7 +25,7 @@
 #include <cmath>
 #include <type_traits>
 
-#if HIPSYCL_LIBKERNEL_IS_DEVICE_PASS_SSCP
+#if ACPP_LIBKERNEL_IS_DEVICE_PASS_SSCP
 
 namespace hipsycl {
 namespace sycl {
@@ -131,7 +115,7 @@ HIPSYCL_BUILTIN float __acpp_frexp(float x, IntT* ptr) {
 
 template<class IntT>
 HIPSYCL_BUILTIN double __acpp_frexp(double x, IntT* ptr) {
-  __acpp_int64 val;
+  __acpp_int32 val;
   double res = __acpp_sscp_frexp_f64(x, &val);
   *ptr = static_cast<IntT>(val);
   return res;
@@ -147,7 +131,7 @@ HIPSYCL_BUILTIN float __acpp_ldexp(float x, IntType k) noexcept {
 
 template<class IntType>
 HIPSYCL_BUILTIN double __acpp_ldexp(double x, IntType k) noexcept {
-  return __acpp_sscp_ldexp_f64(x, static_cast<__acpp_int64>(k));
+  return __acpp_sscp_ldexp_f64(x, static_cast<__acpp_int32>(k));
 }
 
 HIPSYCL_DEFINE_SSCP_GENFLOAT_MATH_BUILTIN(lgamma)
@@ -163,7 +147,7 @@ HIPSYCL_BUILTIN float __acpp_lgamma_r(float x, IntT* ptr) {
 
 template<class IntT>
 HIPSYCL_BUILTIN double __acpp_lgamma_r(double x, IntT* ptr) {
-  __acpp_int64 val;
+  __acpp_int32 val;
   double res = __acpp_sscp_lgamma_r_f64(x, &val);
   *ptr = static_cast<IntT>(val);
   return res;
@@ -220,7 +204,7 @@ HIPSYCL_BUILTIN float __acpp_pown(float x, IntType y) noexcept {
 
 template<class IntType>
 HIPSYCL_BUILTIN double __acpp_pown(double x, IntType y) noexcept {
-  return __acpp_sscp_pown_f64(x, static_cast<__acpp_int64>(y));
+  return __acpp_sscp_pown_f64(x, static_cast<__acpp_int32>(y));
 }
 
 HIPSYCL_DEFINE_SSCP_GENFLOAT_MATH_BUILTIN2(remainder)
@@ -234,7 +218,7 @@ HIPSYCL_BUILTIN float __acpp_rootn(float x, IntType y) noexcept {
 
 template<class IntType>
 HIPSYCL_BUILTIN double __acpp_rootn(double x, IntType y) noexcept {
-  return __acpp_sscp_rootn_f64(x, static_cast<__acpp_int64>(y));
+  return __acpp_sscp_rootn_f64(x, static_cast<__acpp_int32>(y));
 }
 
 HIPSYCL_DEFINE_SSCP_GENFLOAT_MATH_BUILTIN(round)
@@ -389,6 +373,38 @@ template<class T, std::enable_if_t<std::is_integral_v<T>,int> = 0>
 HIPSYCL_BUILTIN T __acpp_clamp(T x, T minval, T maxval) noexcept {
   return sscp_builtins::__acpp_min(
     sscp_builtins::__acpp_max(x, minval), maxval);
+}
+
+template <class T,
+          std::enable_if_t<
+              (std::is_integral_v<T> && sizeof(T) == 1),
+              int> = 0>
+HIPSYCL_BUILTIN T __acpp_ctz(T x) noexcept {
+  return __acpp_sscp_ctz_u8(static_cast<__acpp_uint8>(x));
+}
+
+template <class T,
+          std::enable_if_t<
+              (std::is_integral_v<T> && sizeof(T) == 2),
+              int> = 0>
+HIPSYCL_BUILTIN T __acpp_ctz(T x) noexcept {
+  return __acpp_sscp_ctz_u16(static_cast<__acpp_uint16>(x));
+}
+
+template <class T,
+          std::enable_if_t<
+              (std::is_integral_v<T> && sizeof(T) == 4),
+              int> = 0>
+HIPSYCL_BUILTIN T __acpp_ctz(T x) noexcept {
+  return __acpp_sscp_ctz_u32(static_cast<__acpp_uint32>(x));
+}
+
+template <class T,
+          std::enable_if_t<
+              (std::is_integral_v<T> && sizeof(T) == 8),
+              int> = 0>
+HIPSYCL_BUILTIN T __acpp_ctz(T x) noexcept {
+  return __acpp_sscp_ctz_u64(static_cast<__acpp_uint64>(x));
 }
 
 template <class T,

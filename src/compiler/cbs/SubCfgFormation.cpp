@@ -1,31 +1,13 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2021 Aksel Alpay and contributors
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice,
- * this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
+// SPDX-License-Identifier: BSD-2-Clause
 #include "hipSYCL/compiler/cbs/SubCfgFormation.hpp"
 
 #include "hipSYCL/compiler/cbs/IRUtils.hpp"
@@ -65,6 +47,8 @@
 #include <numeric>
 
 #define DEBUG_SUBCFG_FORMATION
+
+#define PASS_PREFIX_STR "[SubCFG]"
 
 namespace {
 using namespace hipsycl::compiler;
@@ -222,28 +206,6 @@ void loadSizeValuesFromArgument(llvm::Function &F, llvm::Value *LocalSizeArg,
           Builder.CreateLoad(SizeT, LocalSizeGep, "local_size." + llvm::Twine{CurDimName});
     }
   }
-}
-
-void replaceUsesOfGVWith(llvm::Function &F, llvm::StringRef GlobalVarName, llvm::Value *To) {
-  auto M = F.getParent();
-  auto GV = M->getGlobalVariable(GlobalVarName);
-  if (!GV)
-    return;
-
-  HIPSYCL_DEBUG_INFO << "[SSCP][HostKernelWrapper] RUOGVW: " << *GV << " with " << *To << "\n";
-  llvm::SmallVector<llvm::Instruction *> ToErase;
-  for (auto U : GV->users()) {
-    if (auto I = llvm::dyn_cast<llvm::LoadInst>(U)) {
-      if (I->getParent()->getParent() != &F) continue;
-      HIPSYCL_DEBUG_INFO << "[SSCP][HostKernelWrapper] RUOGVW: " << *I << " with " << *To << "\n";
-      I->replaceAllUsesWith(To);
-      ToErase.emplace_back(I);
-    } else if (auto I = llvm::dyn_cast<llvm::Instruction>(U)) {
-      assert(!"FAIL");
-    }
-  }
-  for (auto I : ToErase)
-    I->eraseFromParent();
 }
 
 // get the wg size values for the loop bounds
@@ -484,6 +446,13 @@ void createLoopsAround(llvm::Function &F, llvm::BasicBlock *AfterBB,
     VMap[mergeGVLoadsInEntry(F, state.LocalIdGlobalNames[InnerMost])] = Idx;
     llvm::SmallVector<llvm::BasicBlock *> Blocks{Latches.begin(), Latches.end()};
     llvm::remapInstructionsInBlocks(Blocks, VMap);
+  }
+
+  // in case code references all dimensions, we need to set the remaining dimensions to 0
+  for (size_t D = Dim; D < 3; ++D) {
+    auto ID = mergeGVLoadsInEntry(F, state.LocalIdGlobalNames[D]);
+    ID->replaceAllUsesWith(Builder.getIntN(Idx->getType()->getIntegerBitWidth(), 0));
+    ID->eraseFromParent();
   }
 
   VMap[ContiguousIdx] = Idx;
@@ -841,7 +810,7 @@ void SubCFG::arrayifyMultiSubCfgValues(
   for (auto *BB : Blocks_) {
     for (auto &I : *BB) {
       if (&I == ContiguousIdx || isLoadFromGV(&I, F, cbs::WorkGroupSharedMemory) ||
-          isLoadFromGV(&I, F, cbs::SubGroupSharedMemory) or
+          isLoadFromGV(&I, F, cbs::SubGroupSharedMemory) ||
           isLoadFromGV(&I, F, cbs::SgIdGlobalName))
         continue;
       if (InstAllocaMap.lookup(&I)) {
@@ -1550,7 +1519,8 @@ void arrayifyAllocas(llvm::BasicBlock *EntryBlock, llvm::DominatorTree &DT,
 
 
   if (HI.Level == HierarchicalLevel::H_CBS_SUBGROUP) {
-    assert(mergeGVLoadsInEntry(F, cbs::SgLocalIdGlobalName)->getNumUses() == 0);
+    auto NumUses = mergeGVLoadsInEntry(F, cbs::SgLocalIdGlobalName)->getNumUses();
+    assert(NumUses == 0);
   }
 }
 
@@ -1683,7 +1653,7 @@ private:
         return {Storage, Shape::VARYING};
       } else {
         // IS work-group arrayified alloca
-        assert(llvm::dyn_cast<llvm::Argument>(Storage));
+        assert(llvm::isa<llvm::Argument>(Storage));
         auto InitialWgIndex = mergeGVLoadsInEntry(*llvm::dyn_cast<llvm::Argument>(Storage)->getParent(), "__cont_idx_without_sg");
         return {Builder.CreateGEP(Intrinsic.getArgOperand(0)->getType(), Storage, {InitialWgIndex}),
                 Shape::VARYING};
@@ -2067,7 +2037,6 @@ void formSubgroupCfgs(SubCFG &Cfg, llvm::Function &F, const SplitterAnnotationIn
     }
   }
 
-
   // If alloca is only used in SUBGROUPS that are between the same work group barriers, then
   // the alloca is not arrayified on the work group level
   {
@@ -2078,14 +2047,14 @@ void formSubgroupCfgs(SubCFG &Cfg, llvm::Function &F, const SplitterAnnotationIn
       if (Alloca->getNumUses() > 1)
         continue;
       auto AllocaClone = Alloca->clone();
-      assert(Builder.Insert(AllocaClone) == AllocaClone);
+      auto Inserted = Builder.Insert(AllocaClone);
+      assert(Inserted == AllocaClone);
       Arg->replaceAllUsesWith(AllocaClone);
       Alloca->replaceAllUsesWith(llvm::UndefValue::get(Alloca->getType()));
       Alloca->eraseFromParent();
       assert(Arg->getNumUses() == 0);
     }
   }
-
   // Create barriers at the beginning and end of the cfg
   {
     utils::createSubBarrier(NewF->getEntryBlock().getTerminator(),
@@ -2112,6 +2081,7 @@ void formSubgroupCfgs(SubCFG &Cfg, llvm::Function &F, const SplitterAnnotationIn
     auto* V = mergeGVLoadsInEntry(F, globalVarName);
     llvm::Value* VinNewF = mergeGVLoadsInEntry(*NewF, globalVarName, V->getType());
     if (auto It = InAndOutToArgs.find(V); It != InAndOutToArgs.end()) {
+      HIPSYCL_DEBUG_INFO << "Replace " << *V << " with " << *VinNewF << "\n";
       It->second->replaceAllUsesWith(VinNewF);
     }
     return VinNewF;
@@ -2127,16 +2097,15 @@ void formSubgroupCfgs(SubCFG &Cfg, llvm::Function &F, const SplitterAnnotationIn
 
   // The SgIdArg in NewF should not have any users.
   // They should have been replaced with the subgroup induction variable
-  // NewF->viewCFG();
   assert(SGIdArg->getNumUses() == 0);
   assert(SGGroupIdArg->getNumUses() == 0);
 
   assert(std::distance(NewF->user_begin(), NewF->user_end()) == 1);
-  utils::checkedInlineFunction(llvm::cast<llvm::CallBase>(NewF->user_back()), "[SubCFG]");
+  utils::checkedInlineFunction(llvm::cast<llvm::CallBase>(NewF->user_back()), PASS_PREFIX_STR);
   NewF->eraseFromParent();
 
-  replaceUsesOfGVWith(F, "__cont_idx_without_sg", innerIdx);
-  replaceUsesOfGVWith(F, "__inner_ind_var", Cfg.getInnerPhiIndVar());
+  utils::replaceUsesOfGVWith(F, "__cont_idx_without_sg", innerIdx, PASS_PREFIX_STR);
+  utils::replaceUsesOfGVWith(F, "__inner_ind_var", Cfg.getInnerPhiIndVar(), PASS_PREFIX_STR);
 }
 
 void formSubCfgGeneric(llvm::Function &F, llvm::LoopInfo &LI, llvm::DominatorTree &DT,
@@ -2214,18 +2183,23 @@ void formSubCfgGeneric(llvm::Function &F, llvm::LoopInfo &LI, llvm::DominatorTre
     Cfg.arrayifyMultiSubCfgValues(InstAllocaMap, BaseInstAllocaMap, InstContReplicaMap, SubCFGs,
                                   F.getEntryBlock().getTerminator(), ReqdArrayElements, VecInfo, F);
 
+  llvm::BasicBlock *NewExit =
+      llvm::BasicBlock::Create(F.getContext(), "cbs.exit", &F);
+  llvm::IRBuilder<> ExitBuilder(NewExit);
+  ExitBuilder.CreateRetVoid();
+
   llvm::DenseMap<llvm::Instruction *, llvm::AllocaInst *> RemappedInstAllocaMap;
   // TODO remapped Instr alloca is used for fixSingleSubCfgValue
   for (auto &Cfg : SubCFGs) {
     Cfg.print();
     Cfg.replicate(F, InstAllocaMap, BaseInstAllocaMap, InstContReplicaMap, RemappedInstAllocaMap,
-                  *ExitingBlocks.begin(), LocalSize, state, LoadToAlloca);
+                  NewExit, LocalSize, state, LoadToAlloca);
     purgeLifetime(Cfg);
   }
 
   llvm::BasicBlock *WhileHeader =
       generateWhileSwitchAround(&F.getEntryBlock(), F.getEntryBlock().getSingleSuccessor(),
-                                *ExitingBlocks.begin(), LastBarrierIdStorage, SubCFGs);
+                                NewExit, LastBarrierIdStorage, SubCFGs);
 
   llvm::removeUnreachableBlocks(F);
 
@@ -2383,7 +2357,7 @@ void multiplyFunction(llvm::Function &F, State state) {
     llvm::Value* InnerMostDimensionSize = mergeGVLoadsInEntry(F, state.LocalSizeGlobalNames[state.Dim-1]);
     llvm::Value* Cond =  Builder.CreateURem(InnerMostDimensionSize, Builder.getInt64(SGSize));
     auto* CondNoIncompleteSgs = Builder.CreateICmpEQ(Cond, Builder.getInt64(0));
-    replaceUsesOfGVWith(F, "no-incomplete-sgs", CondNoIncompleteSgs);
+    utils::replaceUsesOfGVWith(F, "no-incomplete-sgs", CondNoIncompleteSgs);
   }
 }
 
@@ -2456,15 +2430,15 @@ llvm::PreservedAnalyses SubCfgFormationPass::run(llvm::Function &F,
     const auto LocalSizes = loadLocalSizesFromAnnotations(F, state);
     assert(LocalSizes.size() == state.Dim);
     for (auto i = 0ul; i < state.Dim; ++i) {
-      replaceUsesOfGVWith(F, state.LocalSizeGlobalNames[i], LocalSizes[i]);
+      utils::replaceUsesOfGVWith(F, state.LocalSizeGlobalNames[i], LocalSizes[i], PASS_PREFIX_STR);
     }
   }
 
   llvm::IRBuilder Builder{F.getContext()};
 
   for (auto i = state.Dim; i < 3; ++i) {
-    replaceUsesOfGVWith(F, state.LocalSizeGlobalNames[i], Builder.getIntN(64, 1));
-    replaceUsesOfGVWith(F, state.LocalIdGlobalNames[i], Builder.getIntN(64, 0));
+    utils::replaceUsesOfGVWith(F, state.LocalSizeGlobalNames[i], Builder.getIntN(64, 1), PASS_PREFIX_STR);
+    utils::replaceUsesOfGVWith(F, state.LocalIdGlobalNames[i], Builder.getIntN(64, 0), PASS_PREFIX_STR);
   }
 
   for (auto i = 0; i < 3; ++i) {
@@ -2479,14 +2453,14 @@ llvm::PreservedAnalyses SubCfgFormationPass::run(llvm::Function &F,
       auto* WorkgroupScratchMemoryAlloca = Builder.CreateAlloca(llvm::IntegerType::getInt8Ty(F.getContext()),
                                                Builder.getIntN(64, 1024 * 1024));
       WorkgroupScratchMemoryAlloca->setAlignment(llvm::Align(128));
-      replaceUsesOfGVWith(F, cbs::WorkGroupSharedMemory,
-                          WorkgroupScratchMemoryAlloca);
+      utils::replaceUsesOfGVWith(F, cbs::WorkGroupSharedMemory,
+                          WorkgroupScratchMemoryAlloca, PASS_PREFIX_STR);
     }
     {
       auto* SubgroupScratchMemoryAlloca = Builder.CreateAlloca(llvm::IntegerType::getInt8Ty(F.getContext()),
                                                Builder.getIntN(64, 32 * 1024));
       SubgroupScratchMemoryAlloca->setAlignment(llvm::Align(128));
-      replaceUsesOfGVWith(F, cbs::SubGroupSharedMemory, SubgroupScratchMemoryAlloca);
+      utils::replaceUsesOfGVWith(F, cbs::SubGroupSharedMemory, SubgroupScratchMemoryAlloca, PASS_PREFIX_STR);
     }
   }
   F.addFnAttr(llvm::Attribute::NoInline);

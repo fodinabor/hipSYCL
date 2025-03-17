@@ -1,31 +1,13 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2021 Aksel Alpay
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice,
- * this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
+// SPDX-License-Identifier: BSD-2-Clause
 
 #include "sycl_test_suite.hpp"
 #include <cstddef>
@@ -63,11 +45,11 @@ unsigned long long t_to_int(T x) {
 }
 
 using exchange_test_types =
-    boost::mpl::list<int, unsigned int, long, unsigned long, long long,
+    boost::mp11::mp_list<int, unsigned int, long, unsigned long, long long,
                      unsigned long long, float, double, int *>;
 // mainly compile test
 BOOST_AUTO_TEST_CASE_TEMPLATE(load_store_exchange, Type,
-                              exchange_test_types::type) {
+                              exchange_test_types) {
   sycl::queue q;
 
   Type initial = int_to_t<Type>(0);
@@ -96,10 +78,10 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(load_store_exchange, Type,
 }
 
 
-template <class T, class AtomicTester,
-          class Verifier>
-void atomic_device_reduction_test(AtomicTester t, Verifier v,
-				  std::function<int(int)> init = [](int t) { return t; }) {
+template <class T, class AtomicOp, class Verifier>
+void atomic_device_reduction_test(AtomicOp op, Verifier v,
+                                  std::string_view type_name, std::string_view op_name,
+                                  std::function<int(int)> init = [](int t) { return -t; }) {
   
   sycl::queue q;
 
@@ -118,9 +100,9 @@ void atomic_device_reduction_test(AtomicTester t, Verifier v,
         sycl::atomic_ref<T, sycl::memory_order::relaxed,
                         sycl::memory_scope::device> r{acc[0]};
         if constexpr(std::is_pointer_v<T>) {
-          t(r, reinterpret_cast<std::ptrdiff_t>(acc[idx]));
+          op(r, reinterpret_cast<std::ptrdiff_t>(acc[idx]));
         } else {
-          t(r, acc[idx]);
+          op(r, acc[idx]);
         }
       }
     });
@@ -135,7 +117,10 @@ void atomic_device_reduction_test(AtomicTester t, Verifier v,
         v(expected, int_to_t<T>(init(i)));
       }
     }
-    BOOST_CHECK(expected == hacc[0]);
+    BOOST_TEST_CONTEXT("Checking result for " << op_name << " on " << type_name << ": "
+        << expected << " (expected) == " << hacc[0] << " (received)") {
+      BOOST_CHECK(expected == hacc[0]);
+    }
   }
 }
 
@@ -198,22 +183,25 @@ BOOST_AUTO_TEST_CASE(fetch_op) {
     v = std::max(v,x);
   };
 
-#define HIPSYCL_ATOMIC_REF_INTEGER_TEST(Tester, Verifier)                      \
-  atomic_device_reduction_test<int>(Tester, Verifier);                         \
-  atomic_device_reduction_test<unsigned int>(Tester, Verifier);                \
-  atomic_device_reduction_test<long>(Tester, Verifier);                        \
-  atomic_device_reduction_test<unsigned long>(Tester, Verifier);               \
-  atomic_device_reduction_test<long long>(Tester, Verifier);                   \
-  atomic_device_reduction_test<unsigned long long>(Tester, Verifier);
+#define HIPSYCL_ATOMIC_REF_TEST_T(Type, Op, Verifier)                              \
+  atomic_device_reduction_test<Type>(Op, Verifier, #Type, #Op);
 
-#define HIPSYCL_ATOMIC_REF_FP_TEST(Tester, Verifier)                           \
-  atomic_device_reduction_test<float>(Tester, Verifier);                       \
-  atomic_device_reduction_test<double>(Tester, Verifier);
+#define HIPSYCL_ATOMIC_REF_INTEGER_TEST(Op, Verifier)                              \
+  HIPSYCL_ATOMIC_REF_TEST_T(int, Op, Verifier)                                     \
+  HIPSYCL_ATOMIC_REF_TEST_T(unsigned int, Op, Verifier)                            \
+  HIPSYCL_ATOMIC_REF_TEST_T(long, Op, Verifier)                                    \
+  HIPSYCL_ATOMIC_REF_TEST_T(unsigned long, Op, Verifier)                           \
+  HIPSYCL_ATOMIC_REF_TEST_T(long long, Op, Verifier)                               \
+  HIPSYCL_ATOMIC_REF_TEST_T(unsigned long long, Op, Verifier)
 
-#define HIPSYCL_ATOMIC_REF_PTR_TEST(Tester, Verifier, Initializer)       	\
-  atomic_device_reduction_test<int *>(Tester, Verifier, Initializer);
+#define HIPSYCL_ATOMIC_REF_FP_TEST(Op, Verifier)                                   \
+  HIPSYCL_ATOMIC_REF_TEST_T(float, Op, Verifier);                                  \
+  HIPSYCL_ATOMIC_REF_TEST_T(double, Op, Verifier);
 
-#ifndef HIPSYCL_LIBKERNEL_CUDA_NVCXX
+#define HIPSYCL_ATOMIC_REF_PTR_TEST(Op, Verifier, Initializer)                     \
+  atomic_device_reduction_test<int *>(Op, Verifier, "int*", #Op, Initializer);
+
+#ifndef ACPP_LIBKERNEL_CUDA_NVCXX
 
   HIPSYCL_ATOMIC_REF_INTEGER_TEST(fetch_add, fetch_add_verifier);
   HIPSYCL_ATOMIC_REF_INTEGER_TEST(fetch_sub, fetch_sub_verifier);

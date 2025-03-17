@@ -1,30 +1,13 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2018,2019 Aksel Alpay
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
+// SPDX-License-Identifier: BSD-2-Clause
 #ifndef HIPSYCL_H_ITEM_HPP
 #define HIPSYCL_H_ITEM_HPP
 
@@ -45,7 +28,7 @@ struct h_item
 {
   friend struct group<Dimensions>;
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   h_item(){}
 public:
   /* -- common interface members -- */
@@ -53,7 +36,7 @@ public:
 
   /// \return The global id with respect to the parallel_for_work_group
   /// invocation. Flexlible local ranges are not taken into account.
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   item<Dimensions, false> get_global() const
   {
     return detail::make_item<Dimensions>(
@@ -61,28 +44,28 @@ public:
       this->get_global_range());
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   item<Dimensions, false> get_local() const
   {
     return get_logical_local();
   }
 
   /// \return The local id in the logical iteration space.
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   item<Dimensions, false> get_logical_local() const
   {
     return detail::make_item<Dimensions>(this->_logical_local_id,
                                          this->_logical_range);
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   item<Dimensions, false> get_physical_local() const
   {
     return detail::make_item<Dimensions>(this->get_physical_local_id(),
                                          this->get_physical_local_range());
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   range<Dimensions> get_global_range() const
   {
 #ifdef HIPSYCL_ONDEMAND_ITERATION_SPACE_INFO
@@ -92,7 +75,7 @@ public:
 #endif
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_global_range(int dimension) const
   {
 #ifdef HIPSYCL_ONDEMAND_ITERATION_SPACE_INFO
@@ -102,7 +85,7 @@ public:
 #endif
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   id<Dimensions> get_global_id() const
   {
 #ifdef HIPSYCL_ONDEMAND_ITERATION_SPACE_INFO
@@ -112,7 +95,7 @@ public:
 #endif
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_global_id(int dimension) const
   {
 #ifdef HIPSYCL_ONDEMAND_ITERATION_SPACE_INFO
@@ -122,7 +105,7 @@ public:
 #endif
   }
 
-  HIPSYCL_KERNEL_TARGET friend bool operator ==(const h_item<Dimensions> lhs, const h_item<Dimensions> rhs)
+  ACPP_KERNEL_TARGET friend bool operator ==(const h_item<Dimensions> lhs, const h_item<Dimensions> rhs)
   {
   const range<Dimensions> _num_groups;
   #if defined(HIPSYCL_ONDEMAND_ITERATION_SPACE_INFO)
@@ -132,64 +115,64 @@ public:
     return lhs._logical_local_id == rhs._logical_local_id &&
            lhs._logical_range == rhs._logical_range &&
            lhs._group_id == rhs._group_id &&
-           lhs._num_groups == rhs.num_groups;
+           lhs._num_groups == rhs._num_groups;
   #endif
   }
 
-  HIPSYCL_KERNEL_TARGET friend bool operator !=(const h_item<Dimensions> lhs, const h_item<Dimensions> rhs)
+  ACPP_KERNEL_TARGET friend bool operator !=(const h_item<Dimensions> lhs, const h_item<Dimensions> rhs)
   {
     return !(lhs==rhs);
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   range<Dimensions> get_local_range() const
   {
     return get_logical_local_range();
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_local_range(int dimension) const
   {
     return get_logical_local_range(dimension);
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   id<Dimensions> get_local_id() const
   {
     return get_logical_local_id();
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_local_id(int dimension) const
   {
     return get_logical_local_id(dimension);
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   range<Dimensions> get_logical_local_range() const
   {
     return _logical_range;
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_logical_local_range(int dimension) const
   {
     return _logical_range[dimension];
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   id<Dimensions> get_logical_local_id() const
   {
     return _logical_local_id;
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_logical_local_id(int dimension) const
   {
     return _logical_local_id[dimension];
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   range<Dimensions> get_physical_local_range() const
   {
     __acpp_if_target_device(
@@ -204,7 +187,7 @@ public:
 
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_physical_local_range(int dimension) const
   {
     __acpp_if_target_device(
@@ -213,7 +196,7 @@ public:
     __acpp_if_target_host(return 1;);
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   id<Dimensions> get_physical_local_id() const
   {
     __acpp_if_target_device(
@@ -227,7 +210,7 @@ public:
     );
   }
 
-  HIPSYCL_KERNEL_TARGET
+  ACPP_KERNEL_TARGET
   size_t get_physical_local_id(int dimension) const
   {
     __acpp_if_target_device(

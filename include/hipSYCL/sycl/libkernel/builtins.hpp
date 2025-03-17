@@ -1,30 +1,13 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2021 Aksel Alpay
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
+// SPDX-License-Identifier: BSD-2-Clause
 #ifndef HIPSYCL_BUILTINS_HPP
 #define HIPSYCL_BUILTINS_HPP
 
@@ -50,12 +33,12 @@ struct builtin_type_traits {
 
   static constexpr int num_elements = 1;
 
-  HIPSYCL_UNIVERSAL_TARGET HIPSYCL_FORCE_INLINE
+  ACPP_UNIVERSAL_TARGET HIPSYCL_FORCE_INLINE
   static type& element(type& v, int i) noexcept {
     return v;
   }
 
-  HIPSYCL_UNIVERSAL_TARGET HIPSYCL_FORCE_INLINE
+  ACPP_UNIVERSAL_TARGET HIPSYCL_FORCE_INLINE
   static type element(const type& v, int i) noexcept {
     return v;
   }
@@ -72,26 +55,26 @@ struct builtin_type_traits<vec<T, Dim>> {
 
   static constexpr int num_elements = Dim;
 
-  HIPSYCL_UNIVERSAL_TARGET HIPSYCL_FORCE_INLINE
+  ACPP_UNIVERSAL_TARGET HIPSYCL_FORCE_INLINE
   static T& element(type& v, int i) noexcept {
     return v[i];
   }
 
-  HIPSYCL_UNIVERSAL_TARGET HIPSYCL_FORCE_INLINE
+  ACPP_UNIVERSAL_TARGET HIPSYCL_FORCE_INLINE
   static T element(const type& v, int i) noexcept {
     return v[i];
   }
 };
 
 template<class T>
-HIPSYCL_UNIVERSAL_TARGET HIPSYCL_FORCE_INLINE
+ACPP_UNIVERSAL_TARGET HIPSYCL_FORCE_INLINE
 typename builtin_type_traits<T>::element_type
 data_element(const T& v, int i) noexcept {
   return builtin_type_traits<T>::element(v, i);
 }
 
 template<class T>
-HIPSYCL_UNIVERSAL_TARGET HIPSYCL_FORCE_INLINE
+ACPP_UNIVERSAL_TARGET HIPSYCL_FORCE_INLINE
 typename builtin_type_traits<T>::element_type&
 data_element(T& v, int i) noexcept {
   return builtin_type_traits<T>::element(v, i);
@@ -420,8 +403,8 @@ using ulonglong16 = vec<unsigned long long, 16>;
   }
 
 #define HIPSYCL_BUILTIN_GENERATOR_BINARY_T_TGENPTR(T, name, impl_name)         \
-  template <access::address_space A>                                           \
-  HIPSYCL_BUILTIN T name(T a, const multi_ptr<T, A> &b) noexcept {             \
+  template <access::address_space A, access::decorated D>                      \
+  HIPSYCL_BUILTIN T name(T a, const multi_ptr<T, A, D> &b) noexcept {          \
     if constexpr (std::is_arithmetic_v<T>) {                                   \
       return impl_name(detail::data_element(a, 0), b.get());                   \
     } else {                                                                   \
@@ -471,10 +454,10 @@ using ulonglong16 = vec<unsigned long long, 16>;
   }
 
 #define HIPSYCL_BUILTIN_GENERATOR_BINARY_T_GENINTPTR(T, name, impl_name)       \
-  template <class IntType, access::address_space A,                            \
+  template <class IntType, access::address_space A, access::decorated D,       \
             std::enable_if_t<detail::is_genint_alternative_type_v<T, IntType>, \
                              int> = 0>                                         \
-  HIPSYCL_BUILTIN T name(T a, const multi_ptr<IntType, A> &b) noexcept {       \
+  HIPSYCL_BUILTIN T name(T a, const multi_ptr<IntType, A, D> &b) noexcept {    \
     if constexpr (std::is_arithmetic_v<T>) {                                   \
       return impl_name(detail::data_element(a, 0), b.get());                   \
     } else {                                                                   \
@@ -809,11 +792,12 @@ HIPSYCL_BUILTIN VecType clamp(const VecType &a, ScalarType minval,
                VecType{static_cast<element_type>(maxval)});
 }
 
+HIPSYCL_DEFINE_BUILTIN(ctz, HIPSYCL_BUILTIN_OVERLOAD_SET_GENINTEGER,
+                       HIPSYCL_BUILTIN_GENERATOR_UNARY_T)
+
 HIPSYCL_DEFINE_BUILTIN(clz, HIPSYCL_BUILTIN_OVERLOAD_SET_GENINTEGER,
                        HIPSYCL_BUILTIN_GENERATOR_UNARY_T)
 
-// TODO clz
-// TODO ctz
 // TODO mad_hi
 // TODO mad_sat
 

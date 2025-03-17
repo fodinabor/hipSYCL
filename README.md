@@ -35,7 +35,7 @@ In order to compile software with AdaptiveCpp, use `acpp`. `acpp` can be used li
 
 `acpp` accepts both command line arguments and environment variables to configure its behavior (e.g., to select the target to compile for). See `acpp --help` for a comprehensive list of options.
 
-For details and instructions on using AdaptiveCpp in CMake projects, please see the documentation on [using AdaptiveCpp](doc/using-hipsycl.md).
+For details and instructions on using AdaptiveCpp in CMake projects, please see the documentation on [using AdaptiveCpp](doc/using-acpp.md).
 
 
 ## About the project
@@ -61,6 +61,7 @@ If you are a student at Heidelberg University and wish to work on AdaptiveCpp, p
 AdaptiveCpp is a production platform for heterogeneous computing, but also a research project. As such, if you use AdaptiveCpp in your research, we kindly request that you cite one of the following publications, depending on your focus:
 
 * A general overview, SYCL 2020, performance and the relationship with oneAPI: *Aksel Alpay, Bálint Soproni, Holger Wünsche, and Vincent Heuveline. 2022. Exploring the possibility of a hipSYCL-based implementation of oneAPI. In International Workshop on OpenCL (IWOCL'22). Association for Computing Machinery, New York, NY, USA, Article 10, 1–12. https://doi.org/10.1145/3529538.3530005*
+* C++ standard parallelism offloading support (stdpar): *Aksel Alpay and Vincent Heuveline. 2024. AdaptiveCpp Stdpar: C++ Standard Parallelism Integrated Into a SYCL Compiler. In Proceedings of the 12th International Workshop on OpenCL and SYCL (IWOCL '24). Association for Computing Machinery, New York, NY, USA, Article 5, 1–12. https://doi.org/10.1145/3648115.3648117*
 * The generic single-pass compiler: *Aksel Alpay and Vincent Heuveline. 2023. One Pass to Bind Them: The First Single-Pass SYCL Compiler with Unified Code Representation Across Backends. In Proceedings of the 2023 International Workshop on OpenCL (IWOCL '23). Association for Computing Machinery, New York, NY, USA, Article 7, 1–12. https://doi.org/10.1145/3585341.3585351*
 * Our CPU compiler: *Joachim Meyer, Aksel Alpay, Sebastian Hack, Holger Fröning, and Vincent Heuveline. 2023. Implementation Techniques for SPMD Kernels on CPUs. In Proceedings of the 2023 International Workshop on OpenCL (IWOCL '23). Association for Computing Machinery, New York, NY, USA, Article 1, 1–12. https://doi.org/10.1145/3585341.3585342*
 * The original talk and the idea of implementing SYCL on non-OpenCL backends: *Aksel Alpay and Vincent Heuveline. 2020. SYCL beyond OpenCL: The architecture, current state and future direction of hipSYCL. In Proceedings of the International Workshop on OpenCL (IWOCL ’20). Association for Computing Machinery, New York, NY, USA, Article 8, 1. DOI:https://doi.org/10.1145/3388333.3388658*
@@ -76,6 +77,7 @@ We gratefully acknowledge [contributions](https://github.com/illuhad/hipSYCL/gra
 * AdaptiveCpp [design and architecture](doc/architecture.md)
 * AdaptiveCpp runtime [specification](doc/runtime-spec.md)
 * AdaptiveCpp [compilation model](doc/compilation.md)
+* AdaptiveCpp [parallel algorithms library](doc/algorithms.md)
 * How to use raw HIP/CUDA inside AdaptiveCpp code to create [optimized code paths](doc/hip-source-interop.md)
 * A simple SYCL example code for testing purposes can be found [here](doc/examples.md).
 * [SYCL Extensions implemented in AdaptiveCpp](doc/extensions.md)

@@ -1,36 +1,19 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2019-2022 Aksel Alpay
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
+// SPDX-License-Identifier: BSD-2-Clause
 #include "hipSYCL/compiler/llvm-to-backend/ptx/LLVMToPtx.hpp"
 #include "hipSYCL/compiler/llvm-to-backend/AddressSpaceMap.hpp"
 #include "hipSYCL/compiler/llvm-to-backend/Utils.hpp"
 #include "hipSYCL/compiler/llvm-to-backend/AddressSpaceInferencePass.hpp"
 #include "hipSYCL/compiler/sscp/IRConstantReplacer.hpp"
-#include "hipSYCL/glue/llvm-sscp/s2_ir_constants.hpp"
+#include "hipSYCL/glue/llvm-sscp/jit-reflection/queries.hpp"
 #include "hipSYCL/common/filesystem.hpp"
 #include "hipSYCL/common/debug.hpp"
 #include <llvm/ADT/SmallVector.h>
@@ -52,6 +35,7 @@
 #include <string>
 #include <system_error>
 #include <vector>
+#include <array>
 
 namespace hipsycl {
 namespace compiler {
@@ -126,10 +110,53 @@ void setPrecSqrt(llvm::Module& M, int Mode) {
   setNVVMReflectParameter(M, "prec-sqrt", Mode);
 }
 
+
+using IntrinsicMapping = std::array<const char*, 2>;
+// These intrinsics seem to not be handled correctly by NVPTX backend,
+// so replace them with our own builtins.
+static constexpr std::array IntrinsicReplacementMap = {
+  IntrinsicMapping{"llvm.pow.f32", "__acpp_sscp_pow_f32"},
+  IntrinsicMapping{"llvm.pow.f64", "__acpp_sscp_pow_f64"},
+  IntrinsicMapping{"llvm.exp.f32", "__acpp_sscp_exp_f32"},
+  IntrinsicMapping{"llvm.exp.f64", "__acpp_sscp_exp_f64"},
+  IntrinsicMapping{"llvm.exp2.f32", "__acpp_sscp_exp2_f32"},
+  IntrinsicMapping{"llvm.exp2.f64", "__acpp_sscp_exp2_f64"},
+  IntrinsicMapping{"llvm.exp10.f32", "__acpp_sscp_exp10_f32"},
+  IntrinsicMapping{"llvm.exp10.f64", "__acpp_sscp_exp10_f64"},
+  IntrinsicMapping{"llvm.cos.f32", "__acpp_sscp_cos_f32"},
+  IntrinsicMapping{"llvm.cos.f64", "__acpp_sscp_cos_f64"},
+  IntrinsicMapping{"llvm.sin.f32", "__acpp_sscp_sin_f32"},
+  IntrinsicMapping{"llvm.sin.f64", "__acpp_sscp_sin_f64"},
+  // tan seems fine
+  IntrinsicMapping{"llvm.log.f32", "__acpp_sscp_log_f32"},
+  IntrinsicMapping{"llvm.log.f64", "__acpp_sscp_log_f64"},
+  IntrinsicMapping{"llvm.log2.f32", "__acpp_sscp_log2_f32"},
+  IntrinsicMapping{"llvm.log2.f64", "__acpp_sscp_log2_f64"},
+  IntrinsicMapping{"llvm.log10.f32", "__acpp_sscp_log10_f32"},
+  IntrinsicMapping{"llvm.log10.f64", "__acpp_sscp_log10_f64"},
+  // asin seems fine (presumably acos and atan as well)
+  // sqrt seems fine
+};
+
+void replaceBrokenLLVMIntrinsics(llvm::Module& M) {
+  for(auto& RM : IntrinsicReplacementMap) {
+    if(auto* F = M.getFunction(RM[0])) {
+      llvm::Function* Replacement = M.getFunction(RM[1]);
+
+      if(!Replacement) {
+        Replacement = llvm::Function::Create(F->getFunctionType(),
+                                             llvm::GlobalValue::ExternalLinkage, RM[1], M);
+        F->replaceAllUsesWith(Replacement);
+      }
+    }
+  }
+}
+
 }
 
 LLVMToPtxTranslator::LLVMToPtxTranslator(const std::vector<std::string> &KN)
-    : LLVMToBackendTranslator{sycl::jit::backend::ptx, KN, KN}, KernelNames{KN} {}
+    : LLVMToBackendTranslator{static_cast<int>(sycl::AdaptiveCpp_jit::compiler_backend::ptx), KN, KN},
+      KernelNames{KN} {}
 
 bool LLVMToPtxTranslator::toBackendFlavor(llvm::Module &M, PassHandler& PH) {
   std::string Triple = "nvptx64-nvidia-cuda";
@@ -167,40 +194,11 @@ bool LLVMToPtxTranslator::toBackendFlavor(llvm::Module &M, PassHandler& PH) {
 
   for(auto KernelName : KernelNames) {
     if(auto* F = M.getFunction(KernelName)) {
-      
-      llvm::SmallVector<llvm::Metadata*, 4> Operands;
-      Operands.push_back(llvm::ValueAsMetadata::get(F));
-      Operands.push_back(llvm::MDString::get(M.getContext(), "kernel"));
-      Operands.push_back(llvm::ValueAsMetadata::getConstant(
-          llvm::ConstantInt::get(llvm::Type::getInt32Ty(M.getContext()), 1)));
-
-      M.getOrInsertNamedMetadata("nvvm.annotations")
-          ->addOperand(llvm::MDTuple::get(M.getContext(), Operands));
-
-      if(KnownGroupSizeX > 0 && KnownGroupSizeY > 0 && KnownGroupSizeZ > 0) {
-
-        llvm::SmallVector<llvm::Metadata*, 7> KnownGroupSizeOperands;
-        KnownGroupSizeOperands.push_back(llvm::ValueAsMetadata::get(F));
-        
-        KnownGroupSizeOperands.push_back(llvm::MDString::get(M.getContext(), "maxntidx"));
-        KnownGroupSizeOperands.push_back(llvm::ValueAsMetadata::getConstant(
-          llvm::ConstantInt::get(llvm::Type::getInt32Ty(M.getContext()), KnownGroupSizeX)));
-
-        KnownGroupSizeOperands.push_back(llvm::MDString::get(M.getContext(), "maxntidy"));
-        KnownGroupSizeOperands.push_back(llvm::ValueAsMetadata::getConstant(
-          llvm::ConstantInt::get(llvm::Type::getInt32Ty(M.getContext()), KnownGroupSizeY)));
-        
-        KnownGroupSizeOperands.push_back(llvm::MDString::get(M.getContext(), "maxntidz"));
-        KnownGroupSizeOperands.push_back(llvm::ValueAsMetadata::getConstant(
-          llvm::ConstantInt::get(llvm::Type::getInt32Ty(M.getContext()), KnownGroupSizeZ)));
-        
-        M.getOrInsertNamedMetadata("nvvm.annotations")
-          ->addOperand(llvm::MDTuple::get(M.getContext(), KnownGroupSizeOperands));
-      }
-
-      F->setLinkage(llvm::GlobalValue::LinkageTypes::ExternalLinkage);
+      applyKernelProperties(F);
     }
   }
+
+  replaceBrokenLLVMIntrinsics(M);
 
   std::string BuiltinBitcodeFile = 
     common::filesystem::join_path(common::filesystem::get_install_directory(),
@@ -230,19 +228,21 @@ bool LLVMToPtxTranslator::toBackendFlavor(llvm::Module &M, PassHandler& PH) {
 
 bool LLVMToPtxTranslator::translateToBackendFormat(llvm::Module &FlavoredModule, std::string &out) {
 
-  auto InputFile = llvm::sys::fs::TempFile::create("hipsycl-sscp-ptx-%%%%%%.bc");
-  auto OutputFile = llvm::sys::fs::TempFile::create("hipsycl-sscp-ptx-%%%%%%.s");
-  
-  std::string OutputFilename = OutputFile->TmpName;
-  
-  auto E = InputFile.takeError();
-  if(E){
+  auto InputFile = llvm::sys::fs::TempFile::create("acpp-sscp-ptx-%%%%%%.bc");
+  auto OutputFile = llvm::sys::fs::TempFile::create("acpp-sscp-ptx-%%%%%%.s");
+
+  if (auto Err = InputFile.takeError()) {
     this->registerError("LLVMToPtx: Could not create temp file: "+InputFile->TmpName);
     return false;
   }
 
-  AtScopeExit DestroyInputFile([&]() { auto Err = InputFile->discard(); });
-  AtScopeExit DestroyOutputFile([&]() { auto Err = OutputFile->discard(); });
+  if (auto Err = OutputFile.takeError()) {
+    this->registerError("LLVMToPtx: Could not create temp file: " + OutputFile->TmpName);
+    return false;
+  }
+
+  AtScopeExit DestroyInputFile([&]() { consumeError(std::move(InputFile->discard())); });
+  AtScopeExit DestroyOutputFile([&]() { consumeError(std::move(OutputFile->discard())); });
 
   std::error_code EC;
   llvm::raw_fd_ostream InputStream{InputFile->FD, false};
@@ -267,7 +267,7 @@ bool LLVMToPtxTranslator::translateToBackendFormat(llvm::Module &FlavoredModule,
                                                     "-x",
                                                     "ir",
                                                     "-o",
-                                                    OutputFilename,
+                                                    OutputFile->TmpName,
                                                     InputFile->TmpName};
   if(IsFastMath)
     Invocation.push_back("-ffast-math");
@@ -354,6 +354,63 @@ std::unique_ptr<LLVMToBackendTranslator>
 createLLVMToPtxTranslator(const std::vector<std::string> &KernelNames) {
   return std::make_unique<LLVMToPtxTranslator>(KernelNames);
 }
+
+void LLVMToPtxTranslator::migrateKernelProperties(llvm::Function* From, llvm::Function* To) {
+  llvm::Module& M = *From->getParent();
+  
+  if(auto* MD = M.getNamedMetadata("nvvm.annotations")) {
+    MD->eraseFromParent();
+  }
+  for (int i = 0; i < From->getFunctionType()->getNumParams(); ++i)
+    if (From->getArg(i)->hasAttribute(llvm::Attribute::ByVal))
+      From->getArg(i)->removeAttr(llvm::Attribute::ByVal);
+
+  From->setLinkage(llvm::GlobalValue::LinkageTypes::InternalLinkage);
+  for(const auto& KN : KernelNames) {
+    if(KN != To->getName() && KN != From->getName())
+      if(auto* F = M.getFunction(KN))
+        applyKernelProperties(F);
+  }
+  applyKernelProperties(To);
+}
+
+void LLVMToPtxTranslator::applyKernelProperties(llvm::Function* F) {
+  llvm::Module& M = *F->getParent();
+
+  llvm::SmallVector<llvm::Metadata*, 4> Operands;
+  Operands.push_back(llvm::ValueAsMetadata::get(F));
+  Operands.push_back(llvm::MDString::get(M.getContext(), "kernel"));
+  Operands.push_back(llvm::ValueAsMetadata::getConstant(
+      llvm::ConstantInt::get(llvm::Type::getInt32Ty(M.getContext()), 1)));
+
+
+  M.getOrInsertNamedMetadata("nvvm.annotations")
+      ->addOperand(llvm::MDTuple::get(M.getContext(), Operands));
+
+  if(KnownGroupSizeX > 0 && KnownGroupSizeY > 0 && KnownGroupSizeZ > 0) {
+
+    llvm::SmallVector<llvm::Metadata*, 7> KnownGroupSizeOperands;
+    KnownGroupSizeOperands.push_back(llvm::ValueAsMetadata::get(F));
+    
+    KnownGroupSizeOperands.push_back(llvm::MDString::get(M.getContext(), "maxntidx"));
+    KnownGroupSizeOperands.push_back(llvm::ValueAsMetadata::getConstant(
+      llvm::ConstantInt::get(llvm::Type::getInt32Ty(M.getContext()), KnownGroupSizeX)));
+
+    KnownGroupSizeOperands.push_back(llvm::MDString::get(M.getContext(), "maxntidy"));
+    KnownGroupSizeOperands.push_back(llvm::ValueAsMetadata::getConstant(
+      llvm::ConstantInt::get(llvm::Type::getInt32Ty(M.getContext()), KnownGroupSizeY)));
+    
+    KnownGroupSizeOperands.push_back(llvm::MDString::get(M.getContext(), "maxntidz"));
+    KnownGroupSizeOperands.push_back(llvm::ValueAsMetadata::getConstant(
+      llvm::ConstantInt::get(llvm::Type::getInt32Ty(M.getContext()), KnownGroupSizeZ)));
+    
+    M.getOrInsertNamedMetadata("nvvm.annotations")
+      ->addOperand(llvm::MDTuple::get(M.getContext(), KnownGroupSizeOperands));
+  }
+
+  F->setLinkage(llvm::GlobalValue::LinkageTypes::ExternalLinkage);
+}
+
 
 }
 }

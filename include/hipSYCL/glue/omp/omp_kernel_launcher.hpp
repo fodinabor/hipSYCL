@@ -1,30 +1,13 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2019-2020 Aksel Alpay
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
+// SPDX-License-Identifier: BSD-2-Clause
 #ifndef HIPSYCL_OPENMP_KERNEL_LAUNCHER_HPP
 #define HIPSYCL_OPENMP_KERNEL_LAUNCHER_HPP
 
@@ -98,11 +81,11 @@ template <class Function> void parallel_invocation(Function kernel) noexcept {
   { kernel(); }
 }
 
-#ifdef __HIPSYCL_USE_ACCELERATED_CPU__
+#ifdef __ACPP_USE_ACCELERATED_CPU__
 extern "C" size_t __acpp_cbs_local_id_x;
 extern "C" size_t __acpp_cbs_local_id_y;
 extern "C" size_t __acpp_cbs_local_id_z;
-extern "C" size_t __hipsycl_cbs_local_id_subgroup;
+extern "C" size_t __acpp_cbs_local_id_subgroup;
 
 template <int Dim, class Function>
 HIPSYCL_LOOP_SPLIT_ND_KERNEL __attribute__((noinline)) inline void
@@ -121,7 +104,7 @@ iterate_nd_range_omp(Function f, const sycl::id<Dim> &&group_id, const sycl::ran
                                  &barrier_impl,
                                  group_shared_memory_ptr,
                                  sub_group_shared_memory_ptr,
-                                 __hipsycl_cbs_local_id_subgroup};
+                                 __acpp_cbs_local_id_subgroup};
     f(this_item);
   } else if constexpr (Dim == 2) {
     sycl::id<Dim> local_id{__acpp_cbs_local_id_x, __acpp_cbs_local_id_y};
@@ -133,7 +116,7 @@ iterate_nd_range_omp(Function f, const sycl::id<Dim> &&group_id, const sycl::ran
                                  &barrier_impl,
                                  group_shared_memory_ptr,
                                  sub_group_shared_memory_ptr,
-                                 __hipsycl_cbs_local_id_subgroup};
+                                 __acpp_cbs_local_id_subgroup};
     f(this_item);
   } else if constexpr (Dim == 3) {
     sycl::id<Dim> local_id{__acpp_cbs_local_id_x, __acpp_cbs_local_id_y, __acpp_cbs_local_id_z};
@@ -145,7 +128,7 @@ iterate_nd_range_omp(Function f, const sycl::id<Dim> &&group_id, const sycl::ran
                                  &barrier_impl,
                                  group_shared_memory_ptr,
                                  sub_group_shared_memory_ptr,
-                                 __hipsycl_cbs_local_id_subgroup};
+                                 __acpp_cbs_local_id_subgroup};
     f(this_item);
   }
 }
@@ -196,7 +179,7 @@ inline void parallel_for_ndrange_kernel(Function f, const sycl::range<Dim> num_g
     // 128 kiB as local memory for group algorithms
     std::aligned_storage_t<128 * 1024, sizeof(double) * 16> group_shared_memory_ptr{};
     std::aligned_storage_t<128 * 32, sizeof(double) * 16> sub_group_shared_memory_ptr{};
-#ifdef __HIPSYCL_USE_ACCELERATED_CPU__
+#ifdef __ACPP_USE_ACCELERATED_CPU__
     std::function<void()> barrier_impl = []() noexcept {
       assert(false && "splitting seems to have failed");
       std::terminate();
@@ -316,7 +299,7 @@ public:
             std::size_t dynamic_local_memory, Kernel k) {
 
     this->_type = type;
-#if !defined(HIPSYCL_HAS_FIBERS) && !defined(__HIPSYCL_USE_ACCELERATED_CPU__)
+#if !defined(HIPSYCL_HAS_FIBERS) && !defined(__ACPP_USE_ACCELERATED_CPU__)
     if (type == rt::kernel_type::ndrange_parallel_for) {
       this->_invoker = [](rt::dag_node *node){};
 

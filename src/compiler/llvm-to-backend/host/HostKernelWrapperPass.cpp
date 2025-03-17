@@ -1,31 +1,13 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2022 Aksel Alpay and contributors
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice,
- * this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
+// SPDX-License-Identifier: BSD-2-Clause
 #include "hipSYCL/compiler/llvm-to-backend/host/HostKernelWrapperPass.hpp"
 
 #include "hipSYCL/common/debug.hpp"
@@ -56,6 +38,9 @@ namespace hipsycl {
 namespace compiler {
 
 namespace {
+
+constexpr llvm::StringRef PassPrefix = "[SSCP][HostKernelWrapper] ";
+
 llvm::StoreInst *storeToGlobalVar(llvm::IRBuilderBase Bld, llvm::Value *V,
                                   llvm::StringRef GlobalVarName) {
   auto M = Bld.GetInsertBlock()->getModule();
@@ -65,21 +50,7 @@ llvm::StoreInst *storeToGlobalVar(llvm::IRBuilderBase Bld, llvm::Value *V,
 }
 
 void replaceUsesOfGVWith(llvm::Function &F, llvm::StringRef GlobalVarName, llvm::Value *To) {
-  auto M = F.getParent();
-  auto GV = M->getGlobalVariable(GlobalVarName);
-  if (!GV)
-    return;
-
-  HIPSYCL_DEBUG_INFO << "[SSCP][HostKernelWrapper] RUOGVW: " << *GV << " with " << *To << "\n";
-  llvm::SmallVector<llvm::Instruction *> ToErase;
-  for (auto U : GV->users()) {
-    if (auto I = llvm::dyn_cast<llvm::LoadInst>(U); I && I->getFunction() == &F) {
-      HIPSYCL_DEBUG_INFO << "[SSCP][HostKernelWrapper] RUOGVW: " << *I << " with " << *To << "\n";
-      I->replaceAllUsesWith(To);
-    }
-  }
-  for (auto I : ToErase)
-    I->eraseFromParent();
+  utils::replaceUsesOfGVWith(F, GlobalVarName, To, PassPrefix);
 }
 
 /*
@@ -93,7 +64,8 @@ void replaceUsesOfGVWith(llvm::Function &F, llvm::StringRef GlobalVarName, llvm:
  * This makes calling the kernel from the host code straighforward, as only the work group info
  * struct and the user arguments need to be passed to the wrapper.
  */
-llvm::Function *makeWrapperFunction(llvm::Function &F, std::int64_t DynamicLocalMemSize) {
+llvm::Function *makeWrapperFunction(llvm::Function &F, std::int64_t DynamicLocalMemSize,
+                                    const std::array<int, 3> &KnownWgSize) {
   auto M = F.getParent();
   auto &Ctx = M->getContext();
 
@@ -104,7 +76,8 @@ llvm::Function *makeWrapperFunction(llvm::Function &F, std::int64_t DynamicLocal
       llvm::StructType::get(llvm::ArrayType::get(SizeT, 3),                 // # groups
                             llvm::ArrayType::get(SizeT, 3),                 // group id
                             llvm::ArrayType::get(SizeT, 3),                 // local size
-                            llvm::PointerType::getUnqual(Bld.getInt8Ty())); // local memory size
+                            llvm::PointerType::getUnqual(Bld.getInt8Ty()), // local memory ptr
+                            llvm::PointerType::getUnqual(Bld.getInt8Ty())); // internal local memory ptr
   auto VoidPtrT = llvm::PointerType::getUnqual(Bld.getInt8Ty());
   auto UserArgsT = llvm::PointerType::getUnqual(VoidPtrT);
 
@@ -154,6 +127,11 @@ llvm::Function *makeWrapperFunction(llvm::Function &F, std::int64_t DynamicLocal
         llvm::LLVMContext::MD_dereferenceable,
         llvm::MDNode::get(Ctx, {llvm::ConstantAsMetadata::get(Bld.getInt64(DynamicLocalMemSize))}));
 
+  auto InternalLocalMemPtr = Bld.CreateLoad(
+      VoidPtrT,
+      Bld.CreateInBoundsGEP(WorkGroupInfoT, Wrapper->getArg(0), {Bld.getInt64(0), Bld.getInt32(4)}),
+      "internal_local_mem_ptr");
+
   llvm::SmallVector<llvm::Value *> Args;
 
   auto ArgArray = Wrapper->arg_begin() + 1;
@@ -184,9 +162,16 @@ llvm::Function *makeWrapperFunction(llvm::Function &F, std::int64_t DynamicLocal
   for (int I = 0; I < 3; ++I) {
     replaceUsesOfGVWith(*Wrapper, cbs::NumGroupsGlobalNames[I], NumGroups[I]);
     replaceUsesOfGVWith(*Wrapper, cbs::GroupIdGlobalNames[I], GroupIds[I]);
-    replaceUsesOfGVWith(*Wrapper, cbs::LocalSizeGlobalNames[I], LocalSize[I]);
+    if (KnownWgSize[I] != 0) {
+      replaceUsesOfGVWith(*Wrapper, cbs::LocalSizeGlobalNames[I],
+                                 llvm::ConstantInt::get(SizeT, KnownWgSize[I]));
+    } else {
+      replaceUsesOfGVWith(*Wrapper, cbs::LocalSizeGlobalNames[I], LocalSize[I]);
+    }
   }
+
   replaceUsesOfGVWith(*Wrapper, cbs::SscpDynamicLocalMemoryPtrName, LocalMemPtr);
+  replaceUsesOfGVWith(*Wrapper, cbs::SscpInternalLocalMemoryPtrName, InternalLocalMemPtr);
 
   F.setLinkage(llvm::GlobalValue::LinkageTypes::InternalLinkage);
   F.replaceAllUsesWith(Wrapper);
@@ -205,21 +190,9 @@ llvm::PreservedAnalyses HostKernelWrapperPass::run(llvm::Function &F,
   if (!SAA || !SAA->isKernelFunc(&F))
     return llvm::PreservedAnalyses::all();
 
-  if (KnownGroupSizeX && KnownGroupSizeY && KnownGroupSizeZ) {
-    llvm::outs() << "SIZES: " << KnownGroupSizeX << ", " << KnownGroupSizeY << ", " << KnownGroupSizeZ << "\n";
-    llvm::IRBuilder<> Bld(&F.getEntryBlock());
-    const std::array arr{KnownGroupSizeX, KnownGroupSizeY, KnownGroupSizeZ};
-#if WG_SSCP_OPT
-    for (auto i = 0ul; i < 3; ++i) {
-      replaceUsesOfGVWith(F, cbs::LocalSizeGlobalNames[i], Bld.getInt64(arr[i]));
-    }
-#endif
-  }
+  auto Wrapper = makeWrapperFunction(F, DynamicLocalMemSize, KnownWgSize);
 
-  auto Wrapper = makeWrapperFunction(F, DynamicLocalMemSize);
-
-  HIPSYCL_DEBUG_INFO << "[SSCP][HostKernelWrapper] Created kernel wrapper: " << Wrapper->getName()
-                     << "\n";
+  HIPSYCL_DEBUG_INFO << PassPrefix << "Created kernel wrapper: " << Wrapper->getName() << "\n";
 
   return llvm::PreservedAnalyses::none();
 }

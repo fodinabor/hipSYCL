@@ -1,6 +1,10 @@
 // RUN: %acpp %s -o %t --acpp-targets=omp --acpp-use-accelerated-cpu -O3
 // RUN: %acpp %s -o %t --acpp-targets=generic --acpp-use-accelerated-cpu -O3
 // RUN: %t | FileCheck %s
+// RUN: %acpp %s -o %t --acpp-targets=generic
+// RUN: ACPP_VISIBILITY_MASK=omp; %t | FileCheck %s
+// RUN: %acpp %s -o %t --acpp-targets=generic -O
+// RUN: ACPP_VISIBILITY_MASK=omp; %t | FileCheck %s
 
 // adapted from https://github.com/UoB-HPC/sycl_dgemm/blob/main/dgemm.cpp
 
@@ -26,8 +30,8 @@ void matmul_blocked(sycl::queue &Q, const size_t Ndim, const size_t Mdim, const 
      auto b = B.get_access<sycl::access_mode::read>(cgh);
      auto c = C.get_access<sycl::access_mode::read_write>(cgh);
 
-     sycl::accessor<double, 2, sycl::access_mode::read_write, sycl::access::target::local> Awrk({Bsize, Bsize}, cgh);
-     sycl::accessor<double, 2, sycl::access_mode::read_write, sycl::access::target::local> Bwrk({Bsize, Bsize}, cgh);
+     sycl::local_accessor<double, 2> Awrk({Bsize, Bsize}, cgh);
+     sycl::local_accessor<double, 2> Bwrk({Bsize, Bsize}, cgh);
 
      cgh.parallel_for(sycl::nd_range<2>{{Ndim, Mdim}, {Bsize, Bsize}}, [=](sycl::nd_item<2> idx) {
        // This work-item will compute C(i,j)

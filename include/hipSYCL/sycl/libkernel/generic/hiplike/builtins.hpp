@@ -1,32 +1,16 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2021 Aksel Alpay
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
+// SPDX-License-Identifier: BSD-2-Clause
 
-#ifndef HIPSYCL_LIBKERNEL_HIPLIKE_BUILTINS_HPP
-#define HIPSYCL_LIBKERNEL_HIPLIKE_BUILTINS_HPP
+#ifndef ACPP_LIBKERNEL_HIPLIKE_BUILTINS_HPP
+#define ACPP_LIBKERNEL_HIPLIKE_BUILTINS_HPP
 
 #include "hipSYCL/sycl/libkernel/backend.hpp"
 #include "hipSYCL/sycl/libkernel/vec.hpp"
@@ -35,8 +19,8 @@
 #include <cmath>
 #include <type_traits>
 
-#if HIPSYCL_LIBKERNEL_IS_DEVICE_PASS_CUDA ||                                   \
-    HIPSYCL_LIBKERNEL_IS_DEVICE_PASS_HIP
+#if ACPP_LIBKERNEL_IS_DEVICE_PASS_CUDA ||                                   \
+    ACPP_LIBKERNEL_IS_DEVICE_PASS_HIP
 
 namespace hipsycl {
 namespace sycl {
@@ -415,6 +399,42 @@ HIPSYCL_HIPLIKE_BUILTIN T __acpp_clamp(T x, T minval, T maxval) noexcept {
     hiplike_builtins::__acpp_max(x, minval), maxval);
 }
 
+template <class T,
+          std::enable_if_t<
+              (std::is_integral_v<T> && sizeof(T) < 4),
+              int> = 0>
+HIPSYCL_HIPLIKE_BUILTIN T __acpp_ctz(T x) noexcept {
+
+  //we convert to the unsigned type to avoid the typecast creating 
+  //additional ones in front of the value if x is negative
+  using Usigned = typename std::make_unsigned<T>::type;
+
+  constexpr T size = CHAR_BIT*sizeof(Usigned);
+
+  return x ? __clz(static_cast<__acpp_int32>(__brev(static_cast<Usigned>(x)))) : size;
+  
+}
+
+template <class T,
+          std::enable_if_t<
+              (std::is_integral_v<T> && sizeof(T) == 4),
+              int> = 0>
+HIPSYCL_HIPLIKE_BUILTIN T __acpp_ctz(T x) noexcept {
+
+  return __clz(static_cast<__acpp_int32>(__brev(static_cast<__acpp_uint32>(x))));
+  
+}
+
+template <class T,
+          std::enable_if_t<
+              (std::is_integral_v<T> && sizeof(T) == 8),
+              int> = 0>
+HIPSYCL_HIPLIKE_BUILTIN T __acpp_ctz(T x) noexcept {
+
+  return __clzll(static_cast<__acpp_int64>(__brevll(static_cast<__acpp_uint64>(x))));
+
+}
+
 
 template <class T,
           std::enable_if_t<
@@ -427,8 +447,10 @@ HIPSYCL_HIPLIKE_BUILTIN T __acpp_clz(T x) noexcept {
   using Usigned = typename std::make_unsigned<T>::type; 
 
   constexpr T diff = CHAR_BIT*(sizeof(__acpp_int32) - sizeof(Usigned));
+  constexpr T size = CHAR_BIT*sizeof(T);
 
-  return __clz(static_cast<__acpp_int32>(static_cast<Usigned>(x)))-diff;
+  auto v = static_cast<__acpp_int32>(static_cast<Usigned>(x));
+  return v ? __clz(v)-diff : size;
   
 }
 
@@ -439,7 +461,7 @@ template <class T,
 HIPSYCL_HIPLIKE_BUILTIN T __acpp_clz(T x) noexcept {
 
   return __clz(static_cast<__acpp_int32>(x));
-  
+
 }
 
 template <class T,

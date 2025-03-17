@@ -1,30 +1,13 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2020 Aksel Alpay
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
+// SPDX-License-Identifier: BSD-2-Clause
 #ifndef HIPSYCL_USM_HPP
 #define HIPSYCL_USM_HPP
 
@@ -34,6 +17,7 @@
 
 #include "context.hpp"
 #include "device.hpp"
+#include "property.hpp"
 #include "queue.hpp"
 #include "exception.hpp"
 #include "usm_query.hpp"
@@ -43,205 +27,264 @@
 #include "hipSYCL/runtime/application.hpp"
 #include "hipSYCL/runtime/backend.hpp"
 #include "hipSYCL/runtime/allocator.hpp"
+#include "hipSYCL/runtime/hints.hpp"
 
 namespace hipsycl {
 namespace sycl {
 
+// Wrapper namespace to declare all usm properties
+namespace property::usm {
+
+}
 
 // Explicit USM
 
 inline void *malloc_device(size_t num_bytes, const device &dev,
-                           const context &ctx) {
-  return detail::select_device_allocator(dev)->allocate(0, num_bytes);
+                           const context &ctx,
+                           const property_list &propList = {}) {
+  rt::allocation_hints hints{};
+  return rt::allocate_device(detail::select_device_allocator(dev), 0,
+                             num_bytes, hints);
 }
 
 template <typename T>
 T* malloc_device(std::size_t count, const device &dev,
-                       const context &ctx) {
-  return static_cast<T*>(malloc_device(count * sizeof(T), dev, ctx));
+                 const context &ctx,
+                 const property_list &propList = {}) {
+  return static_cast<T*>(malloc_device(count * sizeof(T), dev, ctx, propList));
 }
 
-inline void *malloc_device(size_t num_bytes, const queue &q) {
-  return malloc_device(num_bytes, q.get_device(), q.get_context());
+inline void *malloc_device(size_t num_bytes, const queue &q,
+                           const property_list &propList = {}) {
+  return malloc_device(num_bytes, q.get_device(), q.get_context(), propList);
 }
 
 template <typename T>
-T* malloc_device(std::size_t count, const queue &q) {
-  return malloc_device<T>(count, q.get_device(), q.get_context());
+T* malloc_device(std::size_t count, const queue &q,
+                 const property_list &propList = {}) {
+  return malloc_device<T>(count, q.get_device(), q.get_context(), propList);
 }
 
 inline void *aligned_alloc_device(std::size_t alignment, std::size_t num_bytes,
-                                  const device &dev, const context &ctx) {
-  return detail::select_device_allocator(dev)->allocate(alignment, num_bytes);
+                                  const device &dev, const context &ctx,
+                                  const property_list &propList = {}) {
+  rt::allocation_hints hints{};
+  return rt::allocate_device(detail::select_device_allocator(dev), alignment,
+                             num_bytes, hints);
 }
 
 template <typename T>
 T *aligned_alloc_device(std::size_t alignment, std::size_t count,
-                        const device &dev, const context &ctx) {
+                        const device &dev, const context &ctx,
+                        const property_list &propList = {}) {
   return static_cast<T *>(
-      aligned_alloc_device(alignment, count * sizeof(T), dev, ctx));
+      aligned_alloc_device(alignment, count * sizeof(T), dev, ctx, propList));
 }
 
 inline void *aligned_alloc_device(std::size_t alignment, std::size_t size,
-                                  const queue &q) {
-  return aligned_alloc_device(alignment, size, q.get_device(), q.get_context());
+                                  const queue &q,
+                                  const property_list &propList = {}) {
+  return aligned_alloc_device(alignment, size, q.get_device(), q.get_context(),
+                              propList);
 }
 
 template <typename T>
 T *aligned_alloc_device(std::size_t alignment, std::size_t count,
-                        const queue &q) {
-  return aligned_alloc_device<T>(alignment, count, q.get_device(), q.get_context());
+                        const queue &q,
+                        const property_list &propList = {}) {
+  return aligned_alloc_device<T>(alignment, count, q.get_device(),
+                                 q.get_context(), propList);
 }
 
 // Restricted USM
 
-inline void *malloc_host(std::size_t num_bytes, const context &ctx) {
-  return detail::select_usm_allocator(ctx)->allocate_optimized_host(0, num_bytes);
+inline void *malloc_host(std::size_t num_bytes, const context &ctx,
+                         const property_list &propList = {}) {
+  rt::allocation_hints hints{};
+  return rt::allocate_host(detail::select_usm_allocator(ctx), 0, num_bytes,
+                           hints);
 }
 
-template <typename T> T *malloc_host(std::size_t count, const context &ctx) {
-  return static_cast<T*>(malloc_host(count * sizeof(T), ctx));
+template <typename T> T *malloc_host(std::size_t count, const context &ctx,
+                                     const property_list &propList = {}) {
+  return static_cast<T*>(malloc_host(count * sizeof(T), ctx, propList));
 }
 
-inline void *malloc_host(std::size_t num_bytes, const queue &q) {
-  return malloc_host(num_bytes, q.get_context());
+inline void *malloc_host(std::size_t num_bytes, const queue &q,
+                         const property_list &propList = {}) {
+  return malloc_host(num_bytes, q.get_context(), propList);
 }
 
-template <typename T> T *malloc_host(std::size_t count, const queue &q) {
-  return malloc_host<T>(count, q.get_context());
+template <typename T> T *malloc_host(std::size_t count, const queue &q,
+                                     const property_list &propList = {}) {
+  return malloc_host<T>(count, q.get_context(), propList);
 }
 
 inline void *malloc_shared(std::size_t num_bytes, const device &dev,
-                           const context &ctx) {
-  return detail::select_usm_allocator(ctx, dev)->allocate_usm(num_bytes);
+                           const context &ctx,
+                           const property_list &propList = {}) {
+  rt::allocation_hints hints{};
+  return rt::allocate_shared(detail::select_usm_allocator(ctx, dev), num_bytes,
+                             hints);
 }
 
 template <typename T>
-T *malloc_shared(std::size_t count, const device &dev, const context &ctx) {
-  return static_cast<T*>(malloc_shared(count * sizeof(T), dev, ctx));
+T *malloc_shared(std::size_t count, const device &dev,
+                 const context &ctx,
+                 const property_list &propList = {}) {
+  return static_cast<T*>(malloc_shared(count * sizeof(T), dev, ctx, propList));
 }
 
-inline void *malloc_shared(std::size_t num_bytes, const queue &q) {
-  return malloc_shared(num_bytes, q.get_device(), q.get_context());
+inline void *malloc_shared(std::size_t num_bytes, const queue &q,
+                           const property_list &propList = {}) {
+  return malloc_shared(num_bytes, q.get_device(), q.get_context(), propList);
 }
 
-template <typename T> T *malloc_shared(std::size_t count, const queue &q) {
-  return malloc_shared<T>(count, q.get_device(), q.get_context());
+template <typename T> T *malloc_shared(std::size_t count, const queue &q,
+                                       const property_list &propList = {}) {
+  return malloc_shared<T>(count, q.get_device(), q.get_context(), propList);
 }
 
 inline void *aligned_alloc_host(std::size_t alignment, std::size_t num_bytes,
-                                const context &ctx) {
-  return detail::select_usm_allocator(ctx)->allocate_optimized_host(alignment,
-                                                                    num_bytes);
+                                const context &ctx,
+                                const property_list &propList = {}) {
+  rt::allocation_hints hints{};
+  return rt::allocate_host(detail::select_usm_allocator(ctx), alignment,
+                           num_bytes, hints);
 }
 
 template <typename T>
-T *aligned_alloc_host(std::size_t alignment, size_t count, const context &ctx) {
-  return static_cast<T*>(aligned_alloc_host(alignment, count * sizeof(T), ctx));
+T *aligned_alloc_host(std::size_t alignment, size_t count, const context &ctx,
+                      const property_list &propList = {}) {
+  return static_cast<T*>(aligned_alloc_host(alignment, count * sizeof(T), ctx,
+                         propList));
 }
 
 inline void *aligned_alloc_host(size_t alignment, size_t num_bytes,
-                                const queue &q) {
-  return aligned_alloc_host(alignment, num_bytes, q.get_context());
+                                const queue &q,
+                                const property_list &propList = {}) {
+  return aligned_alloc_host(alignment, num_bytes, q.get_context(), propList);
 }
 
 template <typename T>
 T *aligned_alloc_host(std::size_t alignment, std::size_t count,
-                         const queue &q) {
+                         const queue &q,
+                         const property_list &propList = {}) {
   return static_cast<T *>(
-      aligned_alloc_host(alignment, count * sizeof(T), q.get_context()));
+      aligned_alloc_host(alignment, count * sizeof(T), q.get_context(),
+                         propList));
 }
 
 inline void *aligned_alloc_shared(std::size_t alignment, std::size_t num_bytes,
-                                  const device &dev, const context &ctx) {
-  return detail::select_usm_allocator(ctx, dev)->allocate_usm(num_bytes);
+                                  const device &dev, const context &ctx,
+                                  const property_list &propList = {}) {
+  rt::allocation_hints hints{};
+  return rt::allocate_shared(detail::select_usm_allocator(ctx, dev), num_bytes,
+                             hints);
 }
 
 template <typename T>
 T *aligned_alloc_shared(std::size_t alignment, std::size_t count,
-                        const device &dev, const context &ctx) {
-  return static_cast<T*>(aligned_alloc_shared(alignment, count * sizeof(T), dev, ctx));
+                        const device &dev, const context &ctx,
+                        const property_list &propList = {}) {
+  return static_cast<T*>(
+      aligned_alloc_shared(alignment, count * sizeof(T), dev, ctx, propList));
 }
 
 inline void *aligned_alloc_shared(std::size_t alignment, std::size_t num_bytes,
-                                  const queue &q) {
-  return aligned_alloc_shared(alignment, num_bytes, q.get_device(), q.get_context());
+                                  const queue &q,
+                                  const property_list &propList = {}) {
+  return aligned_alloc_shared(alignment, num_bytes, q.get_device(),
+                              q.get_context(), propList);
 }
 
 template <typename T>
 T *aligned_alloc_shared(std::size_t alignment, std::size_t count,
-                        const queue &q) {
-  return static_cast<T *>(aligned_alloc_shared(
-      alignment, count * sizeof(T), q.get_device(), q.get_context()));
+                        const queue &q,
+                        const property_list &propList = {}) {
+  return static_cast<T *>(
+      aligned_alloc_shared(alignment, count * sizeof(T), q.get_device(),
+                           q.get_context(), propList));
 }
 
 
 // General
 
 inline void *malloc(std::size_t num_bytes, const device &dev,
-                    const context &ctx, usm::alloc kind) {
+                    const context &ctx, usm::alloc kind,
+                    const property_list &propList = {}) {
 
   if (kind == usm::alloc::device) {
-    return malloc_device(num_bytes, dev, ctx);
+    return malloc_device(num_bytes, dev, ctx, propList);
   } else if (kind == usm::alloc::host) {
-    return malloc_host(num_bytes, ctx);
+    return malloc_host(num_bytes, ctx, propList);
   } else if (kind == usm::alloc::shared) {
-    return malloc_shared(num_bytes, dev, ctx);
+    return malloc_shared(num_bytes, dev, ctx, propList);
   }
   return nullptr;
 }
 
 template <typename T>
 T *malloc(std::size_t count, const device &dev, const context &ctx,
-          usm::alloc kind) {
-  return static_cast<T*>(malloc(count * sizeof(T), dev, ctx, kind));
+          usm::alloc kind,
+          const property_list &propList = {}) {
+  return static_cast<T*>(malloc(count * sizeof(T), dev, ctx, kind, propList));
 }
 
-inline void *malloc(std::size_t num_bytes, const queue &q, usm::alloc kind) {
-  return malloc(num_bytes, q.get_device(), q.get_context(), kind);
+inline void *malloc(std::size_t num_bytes, const queue &q, usm::alloc kind,
+                    const property_list &propList = {}) {
+  return malloc(num_bytes, q.get_device(), q.get_context(), kind, propList);
 }
 
 template <typename T>
-T *malloc(std::size_t count, const queue &q, usm::alloc kind) {
+T *malloc(std::size_t count, const queue &q, usm::alloc kind,
+          const property_list &propList = {}) {
   return static_cast<T *>(
-      malloc(count * sizeof(T), q.get_device(), q.get_context(), kind));
+      malloc(count * sizeof(T), q.get_device(), q.get_context(), kind,
+             propList));
 }
 
 inline void *aligned_alloc(std::size_t alignment, std::size_t num_bytes,
                            const device &dev, const context &ctx,
-                           usm::alloc kind) {
+                           usm::alloc kind,
+                           const property_list &propList = {}) {
   if (kind == usm::alloc::device) {
-    return aligned_alloc_device(alignment, num_bytes, dev, ctx);
+    return aligned_alloc_device(alignment, num_bytes, dev, ctx, propList);
   } else if (kind == usm::alloc::host) {
-    return aligned_alloc_host(alignment, num_bytes, ctx);
+    return aligned_alloc_host(alignment, num_bytes, ctx, propList);
   } else if (kind == usm::alloc::shared) {
-    return aligned_alloc_shared(alignment, num_bytes, dev, ctx);
+    return aligned_alloc_shared(alignment, num_bytes, dev, ctx, propList);
   }
   return nullptr;
 }
 
 template <typename T>
 T *aligned_alloc(std::size_t alignment, std::size_t count, const device &dev,
-                 const context &ctx, usm::alloc kind) {
+                 const context &ctx, usm::alloc kind,
+                 const property_list &propList = {}) {
   return static_cast<T *>(
-      aligned_alloc(alignment, count * sizeof(T), dev, ctx, kind));
+      aligned_alloc(alignment, count * sizeof(T), dev, ctx, kind, propList));
 }
 
 inline void *aligned_alloc(std::size_t alignment, std::size_t num_bytes,
-                           const sycl::queue &q, usm::alloc kind) {
+                           const sycl::queue &q, usm::alloc kind,
+                           const property_list &propList = {}) {
   return aligned_alloc(alignment, num_bytes, q.get_device(), q.get_context(),
-                       kind);
+                       kind, propList);
 }
 
 template <typename T>
 T *aligned_alloc(std::size_t alignment, std::size_t count, const sycl::queue &q,
-                 usm::alloc kind) {
+                 usm::alloc kind,
+                 const property_list &propList = {}) {
   return static_cast<T *>(aligned_alloc(alignment, count * sizeof(T),
-                                        q.get_device(), q.get_context(), kind));
+                                        q.get_device(), q.get_context(), kind,
+                                        propList));
 }
 
 inline void free(void *ptr, const sycl::context &ctx) {
-  return detail::select_usm_allocator(ctx)->free(ptr);
+  if (ptr != nullptr)
+    return rt::deallocate(detail::select_usm_allocator(ctx), ptr);
 }
 
 inline void free(void *ptr, const sycl::queue &q) {
@@ -285,12 +328,14 @@ public:
       "usm_allocator does not support AllocKind == usm::alloc::device");
 
   usm_allocator() noexcept = delete;
-  usm_allocator(const context &ctx, const device &dev) noexcept
-      : _ctx{ctx}, _dev{dev} {}
+  usm_allocator(const context &ctx, const device &dev,
+                const property_list &propList = {}) noexcept
+      : _ctx{ctx}, _dev{dev}, _propList{propList} {}
 
 
-  usm_allocator(const queue &q) noexcept
-      : _ctx{q.get_context()}, _dev{q.get_device()} {}
+  usm_allocator(const queue &q,
+                const property_list &propList = {}) noexcept
+      : _ctx{q.get_context()}, _dev{q.get_device()}, _propList{propList} {}
   
   usm_allocator(const usm_allocator &) noexcept = default;
   usm_allocator(usm_allocator &&) noexcept = default;
@@ -300,11 +345,12 @@ public:
 
   template <class U>
   usm_allocator(const usm_allocator<U, AllocKind, Alignment> &other) noexcept
-      : _ctx{other._ctx}, _dev{other._dev} {}
+      : _ctx{other._ctx}, _dev{other._dev}, _propList{other._propList} {}
 
   T *allocate(std::size_t num_elements) {
 
-    T *ptr = aligned_alloc<T>(Alignment, num_elements, _dev, _ctx, AllocKind);
+    T *ptr = aligned_alloc<T>(Alignment, num_elements, _dev, _ctx, AllocKind,
+                              _propList);
 
     if (!ptr)
       throw exception{make_error_code(errc::memory_allocation),
@@ -336,6 +382,7 @@ private:
   friend class usm_allocator;
   context _ctx;
   device _dev;
+  property_list _propList;
 };
 }
 } // namespace hipsycl

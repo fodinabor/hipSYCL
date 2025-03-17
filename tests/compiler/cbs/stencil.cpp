@@ -1,6 +1,10 @@
 // RUN: %acpp %s -o %t --acpp-targets=omp --acpp-use-accelerated-cpu -O3
 // RUN: %acpp %s -o %t --acpp-targets=generic --acpp-use-accelerated-cpu -O3
 // RUN: %t | FileCheck %s
+// RUN: %acpp %s -o %t --acpp-targets=generic
+// RUN: ACPP_VISIBILITY_MASK=omp; %t | FileCheck %s
+// RUN: %acpp %s -o %t --acpp-targets=generic -O
+// RUN: ACPP_VISIBILITY_MASK=omp; %t | FileCheck %s
 
 #include <array>
 #include <iostream>
@@ -34,7 +38,7 @@ int main()
       using namespace cl::sycl::access;
       auto acc = buf.get_access<mode::read>(cgh);
       auto out = bufOut.get_access<mode::discard_write>(cgh);
-      auto scratch = cl::sycl::accessor<int, 3, mode::read_write, target::local>{local_range + cl::sycl::range{2, 2, 2}, cgh};
+      auto scratch = cl::sycl::local_accessor<int, 3>{local_range + cl::sycl::range{2, 2, 2}, cgh};
 
       cgh.parallel_for<class local_mem_stencil>(
         cl::sycl::nd_range<3>{global_range, local_range},

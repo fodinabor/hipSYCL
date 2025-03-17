@@ -1,36 +1,24 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2024 Aksel Alpay
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
+// SPDX-License-Identifier: BSD-2-Clause
 #include "hipSYCL/runtime/adaptivity_engine.hpp"
+
 #include "hipSYCL/common/appdb.hpp"
+#include "hipSYCL/glue/llvm-sscp/fcall_specialization.hpp"
+#include "hipSYCL/runtime/allocation_tracker.hpp"
 #include "hipSYCL/runtime/kernel_configuration.hpp"
 #include "hipSYCL/glue/llvm-sscp/jit.hpp"
 #include "hipSYCL/runtime/application.hpp"
 #include "hipSYCL/common/filesystem.hpp"
+#include "hipSYCL/runtime/runtime_event_handlers.hpp"
+#include <cstdint>
 #include <limits>
 
 
@@ -66,10 +54,12 @@ bool is_likely_invariant_argument(common::db::kernel_entry &kernel_entry,
                                   uint64_t current_value) {
   auto& args = kernel_entry.kernel_args;
 
-  const int static_specialization_trigger =
-      application::get_settings().get<setting::jitopt_iads_static_trigger>();
-  const double relative_specialization_trigger =
-      application::get_settings().get<setting::jitopt_iads_relative_trigger>();
+  const double relative_specialization_threshold =
+      application::get_settings().get<setting::jitopt_iads_relative_threshold>();
+  const double relative_eviction_threshold =
+      application::get_settings().get<setting::jitopt_iads_relative_eviction_threshold>();
+  const int relative_trigger_min_size =
+      application::get_settings().get<setting::jitopt_iads_relative_threshold_min_data>();
 
   // In case we find an empty slot, this stores its index.
   int empty_slot = -1;
@@ -82,7 +72,7 @@ bool is_likely_invariant_argument(common::db::kernel_entry &kernel_entry,
     uint64_t& arg_value_count = arg_statistics.count;
     // Is the argument the same as an argument from a previous submission that we
     // are tracking as commonly used?
-    if(arg_statistics.value == current_value && arg_value_count > 0) {
+    if(arg_value_count > 0 && arg_statistics.value == current_value) {
       // Yep, we've hit it again, increase counter
       ++arg_value_count;
       arg_statistics.last_used = kernel_entry.num_registered_invocations;
@@ -97,9 +87,12 @@ bool is_likely_invariant_argument(common::db::kernel_entry &kernel_entry,
       double fraction_of_all_invocations = static_cast<double>(arg_value_count) /
                kernel_entry.num_registered_invocations;
 
-      if (arg_value_count > static_specialization_trigger ||
-          ((fraction_of_all_invocations > relative_specialization_trigger) &&
-           application_run > 0)) {
+      bool can_use_fraction_of_all_invocations =
+          (application_run > kernel_entry.first_iads_invocation_run) ||
+          (arg_value_count > relative_trigger_min_size);
+
+      if (can_use_fraction_of_all_invocations &&
+          (fraction_of_all_invocations > relative_specialization_threshold)) {
         is_already_specialized = true;
         return true;
       } else
@@ -133,18 +126,23 @@ bool is_likely_invariant_argument(common::db::kernel_entry &kernel_entry,
 
     for(int i = 0; i < common::db::kernel_arg_entry::max_tracked_values; ++i) {
       auto& arg_statistics = args[param_index].common_values[i];
-      
-      if(arg_statistics.last_used < eviction_candidate_last_used_time) {
-        auto age = kernel_entry.num_registered_invocations - arg_statistics.last_used;
-        double fraction_of_all_invocations = static_cast<double>(arg_statistics.count) /
-               kernel_entry.num_registered_invocations;
+      auto& was_specialized = args[param_index].was_specialized[i];
 
-        if (age > static_specialization_trigger &&
-            fraction_of_all_invocations < relative_specialization_trigger) {
-          
-          // Update least-recently-used so that we can find potential entries to evict
-          eviction_candidate_slot = i;
-          eviction_candidate_last_used_time = arg_statistics.last_used;
+      if(arg_statistics.last_used < eviction_candidate_last_used_time) {
+
+        double fraction_of_all_invocations =
+            static_cast<double>(arg_statistics.count) /
+            kernel_entry.num_registered_invocations;
+
+        if (!was_specialized ||
+            (fraction_of_all_invocations < relative_eviction_threshold)) {
+          auto age = kernel_entry.num_registered_invocations - arg_statistics.last_used;
+          if (age > relative_trigger_min_size) {
+            
+            // Update least-recently-used so that we can find potential entries to evict
+            eviction_candidate_slot = i;
+            eviction_candidate_last_used_time = arg_statistics.last_used;
+          }
         }
       }
     }
@@ -156,10 +154,34 @@ bool is_likely_invariant_argument(common::db::kernel_entry &kernel_entry,
 
   return false;
 }
+
+int determine_ptr_alignment(uint64_t ptrval) {
+  if(ptrval == 0)
+    return 0;
+  
+#if defined(__GNUC__) && !defined(__llvm__) && !defined(__INTEL_COMPILER) && \
+    !defined(__NVCOMPILER)
+  // gcc supports __builtin_ctz, but versions prior to 10
+  // do not support __has_builtin
+  #define ACPP_HAS_BUILTIN_CTZ
+#else
+  #if __has_builtin(__builtin_ctzll)
+    #define ACPP_HAS_BUILTIN_CTZ
+  #endif
+#endif
+
+#ifdef ACPP_HAS_BUILTIN_CTZ
+  uint64_t alignment = 1ull << __builtin_ctzll(ptrval);
+  return alignment >= 32 ? 32 : 0;
+#else
+  return 0;
+#endif
+}
+
 }
 
 kernel_adaptivity_engine::kernel_adaptivity_engine(
-    hcf_object_id hcf_object, const std::string &backend_kernel_name,
+    hcf_object_id hcf_object, std::string_view backend_kernel_name,
     const hcf_kernel_info *kernel_info,
     const glue::jit::cxx_argument_mapper &arg_mapper,
     const range<3> &num_groups, const range<3> &block_size, void **args,
@@ -176,6 +198,21 @@ kernel_adaptivity_engine::kernel_adaptivity_engine(
 kernel_configuration::id_type
 kernel_adaptivity_engine::finalize_binary_configuration(
     kernel_configuration &config) {
+    
+  // At any adaptivity level need to handle function call specializations.
+  for (int i = 0; i < _kernel_info->get_num_parameters(); ++i) {
+    auto &annotations = _kernel_info->get_known_annotations(i);
+    std::size_t arg_size = _kernel_info->get_argument_size(i);
+    for (auto annotation : annotations) {
+      if (annotation ==
+              hcf_kernel_info::annotation_type::fcall_specialized_config &&
+          arg_size == sizeof(glue::sscp::fcall_config_kernel_property_t)) {
+        glue::sscp::fcall_config_kernel_property_t value;
+        std::memcpy(&value, _arg_mapper.get_mapped_args()[i], arg_size);
+        config.set_function_call_specialization_config(i, value);
+      }
+    }
+  }
 
   if(_adaptivity_level > 0) {
     // Enter single-kernel code model
@@ -210,28 +247,117 @@ kernel_adaptivity_engine::finalize_binary_configuration(
         std::memcpy(&buffer_value, _arg_mapper.get_mapped_args()[i], arg_size);
         config.set_specialized_kernel_argument(i, buffer_value);
       }
+
+      if (_kernel_info->get_argument_type(i) ==
+          hcf_kernel_info::argument_type::pointer) {
+        if (has_annotation(_kernel_info, i,
+                           hcf_kernel_info::annotation_type::noalias)) {
+          config.set_kernel_param_flag(i, kernel_param_flag::noalias);
+        }
+      }
+    }
+
+    // Handle auto alignment specialization
+    for(int i = 0; i < _kernel_info->get_num_parameters(); ++i) {
+      std::size_t arg_size = _kernel_info->get_argument_size(i);
+      if (_kernel_info->get_argument_type(i) == hcf_kernel_info::argument_type::pointer) {
+        uint64_t buffer = 0;
+        std::memcpy(&buffer, _arg_mapper.get_mapped_args()[i],
+                    _kernel_info->get_argument_size(i));
+
+        int alignment = determine_ptr_alignment(buffer);
+        if(alignment > 0) {
+          HIPSYCL_DEBUG_INFO
+              << "adaptivity_engine: Inferred pointer alignment of "
+              << alignment << " for kernel argument " << i << std::endl;
+          config.set_known_alignment(i, alignment);
+        }
+      }
+    }
+
+    if(application::get_settings().get<setting::enable_allocation_tracking>()) {
+      // Detect whether pointer arguments qualify for NoAlias/restrict semantics.
+      // This is achieved by determining the base of the allocations for all pointer
+      // kernel arguments, and checking whether there are other pointer arguments
+      // from the same allocation.
+      constexpr int max_allocations = 32;
+      uint64_t allocation_base_addresses [max_allocations] = {};
+      bool allocations_exceeded = false;
+      for(int alloc_index = 0, i = 0; i < _kernel_info->get_num_parameters(); ++i) {
+        if(_kernel_info->get_argument_type(i) == hcf_kernel_info::argument_type::pointer) {
+          auto arg_size = _kernel_info->get_argument_size(i);
+          if(arg_size == sizeof(void*)) {
+            void* ptr_arg;
+            std::memcpy(&ptr_arg, _arg_mapper.get_mapped_args()[i], arg_size);
+            if (ptr_arg) {
+              allocation_info ainfo;
+              uint64_t allocation_base;
+              if(allocation_tracker::query_allocation(ptr_arg, ainfo, allocation_base)) {
+                allocation_base_addresses[alloc_index] = allocation_base;
+              }
+            }
+          }
+          ++alloc_index;
+          if (alloc_index >= max_allocations) {
+            allocations_exceeded = true;
+            break;
+          }
+        }
+      }
+      if (!allocations_exceeded) {
+        for (int alloc_index = 0, i = 0; i < _kernel_info->get_num_parameters();
+            ++i) {
+          if (_kernel_info->get_argument_type(i) ==
+              hcf_kernel_info::argument_type::pointer) {
+            if (allocation_base_addresses[alloc_index] != 0) {
+              bool argument_might_alias = false;
+              for (int k = 0; k < max_allocations; ++k) {
+                if (k != alloc_index) {
+                  if (allocation_base_addresses[alloc_index] ==
+                      allocation_base_addresses[k]) {
+                    argument_might_alias = true;
+                    break;
+                  }
+                }
+              }
+              if (!argument_might_alias) {
+                HIPSYCL_DEBUG_INFO << "adaptivity_engine: Inferred noalias "
+                                      "pointer semantics for kernel argument "
+                                  << i << std::endl;
+                config.set_kernel_param_flag(i, kernel_param_flag::noalias);
+              }
+            }
+            ++alloc_index;
+          }
+        }
+      }
     }
   }
-
+  
   if(_adaptivity_level > 1) {
+
     auto base_id = config.generate_id();
     
     // Automatic application of specialization constants by detecting
     // invariant kernel arguments
     auto& appdb = common::filesystem::persistent_storage::get().get_this_app_db();
     appdb.read_write_access([&](common::db::appdb_data& data){
+      
       auto& kernel_entry = data.kernels[base_id];
+      if (kernel_entry.first_iads_invocation_run ==
+          common::db::kernel_entry::no_usage) {
+        kernel_entry.first_iads_invocation_run = data.content_version;
+      }
       ++kernel_entry.num_registered_invocations;
 
       std::size_t num_kernel_args = _kernel_info->get_num_parameters();
       if(kernel_entry.kernel_args.size() != num_kernel_args)
         kernel_entry.kernel_args.resize(num_kernel_args);
 
-      for(int i = 0; i < num_kernel_args; ++i) {
+      auto process_kernel_arg = [&](int i) {
         uint64_t arg_value = 0;
         std::memcpy(&arg_value, _arg_mapper.get_mapped_args()[i],
                     _kernel_info->get_argument_size(i));
-        // TODO: Don't specialize if specialized<> is already used
         if (_kernel_info->get_argument_type(i) !=
                 hcf_kernel_info::argument_type::pointer &&
             is_likely_invariant_argument(kernel_entry, i, data.content_version,
@@ -246,6 +372,16 @@ kernel_adaptivity_engine::finalize_binary_configuration(
           HIPSYCL_DEBUG_INFO << "adaptivity_engine: Not specializing kernel argument " << i
                              << std::endl;
         }
+      };
+
+      if(!kernel_entry.retained_argument_indices.empty()) {
+        for(auto arg_index : kernel_entry.retained_argument_indices) {
+          process_kernel_arg(arg_index);
+        }
+      } else {
+        for(int i = 0; i < num_kernel_args; ++i) {
+          process_kernel_arg(i);
+        }
       }
     });
   }
@@ -253,9 +389,10 @@ kernel_adaptivity_engine::finalize_binary_configuration(
   return config.generate_id();
 }
 
-std::string kernel_adaptivity_engine::select_image_and_kernels(std::vector<std::string>* kernel_names_out){
+std::string kernel_adaptivity_engine::select_image_and_kernels(
+    std::vector<std::string> *kernel_names_out) {
   if(_adaptivity_level > 0) {
-    *kernel_names_out = std::vector{_kernel_name};
+    *kernel_names_out = std::vector{std::string{_kernel_name}};
 
     std::vector<std::string> all_kernels_in_image;
     return  glue::jit::select_image(_kernel_info, &all_kernels_in_image);

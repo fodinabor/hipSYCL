@@ -4,6 +4,389 @@ AdaptiveCpp implements several extensions that are not defined by the specificat
 
 ## Supported extensions
 
+### `ACPP_EXT_RESTRICT_PTR`
+
+Provides a wrapper type that hints to the compiler that a pointer kernel argument does not alias other pointer arguments.
+*Note:* This currently only has an effect with AdaptiveCpp's generic JIT compiler (`--acpp-targets=generic`), other compilation flows ignore this hint.
+
+Example:
+
+```c++
+
+sycl::queue q;
+float* data = ...
+sycl::AdaptiveCpp_restrict_ptr<float> restrict_data = data;
+
+q.parallel_for(range, [=](auto idx){
+  // Converts implicitly to the underlying pointer type - float* in this
+  // example.
+  restrict_data[idx] *= 1.5f;
+});
+```
+
+### `ACPP_EXT_JIT_COMPILE_IF`
+
+Allows for specializing code based on target properties only known at JIT time. This is only supported with AdaptiveCpp's default generic JIT compiler (`--acpp-targets=generic`).
+If you also want to support other compilation flows, use of the following APIs must
+be guarded using `__acpp_if_target_sscp()`.
+
+#### Example
+```c++
+namespace jit = sycl::AdaptiveCpp_jit;
+
+__acpp_if_target_sscp(
+  jit::compile_if(
+    jit::reflect<jit::reflection_query::target_vendor_id>() == 
+      jit::vendor_id::nvidia,
+    [](){
+      // Will only be included in the JIT-compiled kernel if the target is NVIDIA hardware.
+      // The branching will be evaluated at JIT-time; there will be no runtime overhead
+      // in the generated kernel.
+      //
+      // As such, this mechanism can also be used to guard code that is unsupported or
+      // does not compile correctly on other hardware.
+    });
+);
+
+```
+
+#### API reference
+
+```c++
+namespace sycl::AdaptiveCpp_jit {
+
+/// JIT reflection API
+
+enum class compiler_backend : int {
+  spirv,
+  ptx,
+  amdgpu,
+  host
+};
+
+namespace vendor_id {
+
+// These vendor ids are provided for convenience since
+// they frequently occur; this list is non-exclusive; other
+// vendor_id values might be returned by JIT reflection APIs.
+inline constexpr int nvidia;
+inline constexpr int amd;
+inline constexpr int intel;
+}
+
+///
+/// This namespace defines properties that the JIT compiler can be queried for.
+namespace reflection_query {
+
+/// Vendor id of the target hardware
+/// Return type: int
+struct target_vendor_id;
+
+/// Returns a numeric identifier for the target architecture. For NVIDIA GPUs, this
+/// is the SM architecture (e.g. 86 for sm_86). For AMD GPUs, it is the amdgcn architecture
+/// as an hexadecimal number (e.g. 0x90c for gfx90c).
+/// For other hardware, the query currently returns 0.
+/// Return type: int
+struct target_arch;
+
+/// Returns whether the hardware has independent forward progress for each work item.
+/// Return type: bool
+struct target_has_independent_forward_progress;
+
+/// Returns whether the target is a CPU.
+/// Return type: bool
+struct target_is_cpu;
+
+/// Returns whether the target is a GPU.
+/// Return type: bool
+struct target_is_gpu;
+
+/// Returns the AdaptiveCpp runtime backend that is managing the execution of this kernel.
+/// Return type: int (sycl::backend cast to int)
+struct runtime_backend;
+
+/// Returns the AdaptiveCpp runtime backend that is managing the execution of this kernel.
+/// Return type: compiler_backend
+struct compiler_backend;
+}
+
+/// Evaluates at JIT-time the specified query. Query must be one of the types
+/// defined in AdaptiveCpp_jit::property.
+/// The compiler replaces calls to this function with the return value at JIT-time;
+/// Calls to this function will not remain in the final generated code and not cause runtime
+/// overhead.
+template<class Query>
+auto reflect();
+
+/// Evaluates at JIT-time whether the JIT reflection mechanism supports the specified query.
+/// Currently, all of the queries listed above are supported universally, but in the future
+/// queries might be added that are only supported for certain backends.
+///
+/// Query must be one of the types defined in AdaptiveCpp_jit::property.
+///
+/// The compiler replaces calls to this function with the return value at JIT-time;
+/// Calls to this function will not remain in the final generated code and not cause runtime
+/// overhead.
+template<class Query>
+bool knows();
+
+
+/// Code-generates the callable f only if condition evaluates to true at JIT time.
+///
+/// condition must evaluate to a value known at JIT time, either using compile-time
+/// values or return values from the JIT reflection API.
+///
+/// Because the condition is evaluated at JIT time, no runtime overhead
+/// will be present in the compiled kernel due to branching.
+///
+/// The signature of f is void().
+template<class F>
+void compile_if(bool condition, F&& f);
+
+/// Code-generates the callable if_branch only if condition evaluates to true at JIT time.
+/// Otherwise, the callable else_branch is code-generated.
+///
+/// condition must evaluate to a constant at JIT time, either using compile-time
+/// constants or return values from the JIT reflection API.
+///
+/// Because the condition is evaluated at JIT time, no runtime overhead
+/// will be present in the compiled kernel due to branching.
+///
+/// The signature of if_branch and else_branch is T() for arbitrary types T.
+///
+/// \return If T is not void, compile_if_else() returns the value returned by the
+/// user-provided callable that is invoked.
+template<class F, class G>
+auto compile_if_else(bool condition, F&& if_branch, G&& else_branch);
+
+}
+
+```
+
+### `ACPP_EXT_DYNAMIC_FUNCTIONS`
+
+This extension allows users to provide functions used in kernels with definitions selected at runtime. We call such functions *dynamic functions*, since their definition will be determined at runtime using the JIT compiler. Once a kernel using dynamic functions has been JIT-compiled, there are no runtime overheads as dynamic functions are hardwired at JIT-time.
+
+This can be used to assemble custom kernels at runtime, or to obtain kernel-fusion-like semantics with a high degree of user control.
+
+**This functionality relies on JIT compilation to provide correct semantics. It is thus only available with `--acpp-targets=generic`.** For other compilation flows, code using this functionality will not compile.
+
+The extension works by replacing all function calls in the kernel to a target function with function calls to a replacement function. The original function may be just a declaration, or a function with an existing definition.
+
+The following example demonstrates how this feature could be used in kernel-fusion-like style to decide at runtime that the kernel should consist of both calls to `myfunction1` followed by `myfunction2`.
+```c++
+// SYCL_EXTERNAL ensures that these functions are emitted to device code,
+// even though they are not referenced by the kernel at compile time.
+// SYCL_EXTERNAL may be optional in future versions of this extension.
+SYCL_EXTERNAL void myfunction1(sycl::item<1> idx) {
+  // code
+}
+
+SYCL_EXTERNAL void myfunction2(sycl::item<1> idx) {
+  // code
+}
+
+void execute_operations(sycl::item<1> idx);
+
+int main() {
+  sycl::queue q;
+
+  // The dynamic_function_config object stores the JIT-time function mapping information.
+  sycl::AdaptiveCpp_jit::dynamic_function_config dyn_function_config;
+  // Requests calls to execute_operations to be replaced at JIT time
+  // with {myfunction1(idx); myfunction2(idx);}
+  dyn_function_config.define_as_call_sequence(&execute_operations, {&myfunction1, &myfunction2});
+  q.parallel_for(sycl::range{1024}, dyn_function_config.apply([=](sycl::item<1> idx){
+    execute_operations(idx);
+  }));
+
+  q.wait();
+}
+```
+
+
+The AdaptiveCpp runtime maintains a kernel cache that automatically distinguishes the same kernel invoked with different dynamic function configuration. JIT compilation is only triggered when a new configuration is requested that is not yet present in the cache.
+
+**Important notes**
+* `dynamic_function_config::apply()` is a very light-weight operation, but constructing a new `dynamic_function_config` object may have some overhead due to initializing the required data structures. It is therefore recommended to reuse a preexisting `dynamic_function_config` object when the same kernel is submitted multiple times with the same configuration.
+* Only a single `dynamic_function_config` object may be applied at a given kernel launch.
+* It is the user's responsibility to ensure that the `dynamic_function_config` object is kept alive at least until all kernels using it have completed.
+* `dynamic_function_config` is not thread-safe; if one object is shared across multiple threads, it is the user's responsibility to ensure appropriate synchronization.
+* With this extension, the user can exchange kernel code at runtime. This means that in general, the compiler cannot know at compile time anymore which parts of the code need to be part of device code. Therefore, functions  providing the definitions have to be marked as `SYCL_EXTERNAL` to ensure that they are emitted to device code. This can be omitted if the function is invoked from the kernel already at compile time.
+* It is possible to provide a "default definition" for dynamic functions by not just declaring them, but also providing a definition (e.g. in the example above, provide a definition for `execute_operations`). However, in this case, we recommend that the function is marked with `__attribute__((noinline))`. Otherwise, in some cases the compiler might decide to already inline the function early on during the optimization process -- and once, inlined, the JIT compiler no loner sees the function and therefore can no longer find function calls to replace. The `noinline` attribute will have no performance implications once the replacement function definition has been put in place by the JIT compiler. Additionally, if the default function does not actually use the function arguments, the frontend might not actually emit function calls to the dynamic function. It is thus a good idea to use `sycl::AdaptiveCpp_jit::arguments_are_used()` to assert that these arguments might e.g. be used by a dynamic function replacement function.
+
+With a default function definition, the example above might look like so:
+```c++
+SYCL_EXTERNAL void myfunction1(int* data, sycl::item<1> idx) {
+  // code
+}
+
+SYCL_EXTERNAL void myfunction2(int* data, sycl::item<1> idx) {
+  // code
+}
+
+__attribute__((noinline))
+void execute_operations(int* data, sycl::item<1> idx) {
+  // This prevents the compiler from removing calls to execute_operations if it
+  // sees that the function cannot actually have any side-effects.
+  sycl::AdaptiveCpp_jit::arguments_are_used(data, idx);
+}
+
+int main() {
+  sycl::queue q;
+  int* data = ...;
+
+  // The dynamic_function_config object stores the JIT-time function mapping information.
+  sycl::AdaptiveCpp_jit::dynamic_function_config dyn_function_config;
+  // Requests calls to execute_operations to be replaced at JIT time
+  // with {myfunction1(idx); myfunction2(idx);}
+  // If this is removed, the regular function definition of execute_operations
+  // will be executed instead.
+  dyn_function_config.define_as_call_sequence(&execute_operations, {&myfunction1, &myfunction2});
+  q.parallel_for(sycl::range{1024}, dyn_function_config.apply([=](sycl::item<1> idx){
+    execute_operations(data, idx);
+  }));
+
+  q.wait();
+}
+```
+
+
+#### API Reference
+
+A more detailed API reference follows:
+
+```c++
+namespace sycl::jit {
+
+// This function can be used in dynamic functions with a definition
+// to prevent the compiler from performing early optimizations if it finds
+// that the function does not actually use the arguments because it cannot know
+// that the definition may be replaced at runtime.
+template<class T, typename... Args>
+void arguments_are_used(Args&&... args);
+
+// Represents a function id. Objects of this class can be obtained from
+// dynamic_function or dynamice_function_definition. dynamic_function_id objects
+// can be passed to dynamice_function_config to control the dynamic function mapping.
+class dynamic_function_id {
+public:
+  dynamic_function_id() = default;
+  explicit dynamic_function_id(__unspecified_handle_type__);
+
+  const __unspecified_handle_type__ get_handle() const;
+};
+
+// Represents a dynamic function, where the definition might be replaced at runtime.
+template<class Ret, typename... Args>
+class dynamic_function {
+public:
+  // Construct object. IMPORTANT: The function pointer it is initialized with
+  // must directly point to the target function in the source code. This is
+  // because the compiler needs to understand at compile-time which functions
+  // are dynamic functions. When a variable however is passed in, this
+  // can no longer be guaranteed. Example:
+  //
+  // Allowed: dynamic_function df{&myfunc};
+  // Not allowed: auto* myfuncptr = &myfunc; dynamic_function{myfuncptr};
+  dynamic_function(Ret (*func)(Args...));
+
+  // Obtain dynamic_function_id object.
+  dynamic_function_id id() const;
+};
+
+
+// Represents a dynamic function definition, i.e. a function whose definition might replace
+// the definition of a dynamic_function at runtime.
+template<class Ret, typename... Args>
+class dynamic_function_definition {
+public:
+
+  // Construct object. The same restrictions apply as with the dynamic_function constructor
+  // regarding the function pointer argument. See above for details.
+  dynamic_function_definition(Ret (*func)(Args...));
+
+  // Obtain dynamic_function_id object.
+  dynamic_function_id id() const;
+};
+
+// Represents the dynamic function configuration that may be applied to a kernel.
+// Per kernel launch, only a single dynamic_function_config may be applied.
+class dynamic_function_config {
+public:
+
+  // Set the definition of `func` to be provided by `definition`.
+  // IMPORTANT: The function pointers passed as arguments
+  // must directly point to the target function in the source code. This is
+  // because the compiler needs to understand at compile-time which functions
+  // are dynamic functions. When a variable however is passed in, this
+  // can no longer be guaranteed.
+  //
+  // This function can be seen as shorthand for
+  // `define(dynamic_function{func}, dynamic_function_definition{definition})`
+  template<class Ret, typename... Args>
+  void define(Ret (*func)(Args...), Ret(*definition)(Args...));
+
+  // Set the definition of `func` to be provided by `definition`.
+  //
+  // This is a type-safer, but semantically equivalent shorthand for
+  // define(df.id(), definition.id()).
+  template <class Ret, typename... Args>
+  void define(dynamic_function<Ret, Args...> df,
+              dynamic_function_definition<Ret, Args...> definition) {
+    define(df.id(), definition.id());
+  }
+
+  // Set the definition of `func` to be provided by `definition`.
+  // In most cases, the type-safe other overloads should be used instead of this one.
+  // However, this function can be useful when type-erasure of the functions is explicitly
+  // desired; e.g. when in a larger framework many function ids need to be stored
+  // in a central location.
+  void define(dynamic_function_id function, dynamic_function_id definition)
+
+  // Set the definition of `func` to be provided by a sequence of calls to the functions
+  // provided in `definitions`. Note that `define_as_call_sequence` is only supported
+  // for functions of void return type.
+  //
+  // IMPORTANT: The function pointers passed as arguments
+  // must directly point to the target function in the source code. This is
+  // because the compiler needs to understand at compile-time which functions
+  // are dynamic functions. When a variable however is passed in, this
+  // can no longer be guaranteed.
+  template <typename... Args>
+  void define_as_call_sequence(void (*func)(Args...),
+                          const std::vector<void (*)(Args...)> &definitions);
+
+  // Set the definition of `func` to be provided by a sequence of calls to the functions
+  // provided in `definitions`. Note that `define_as_call_sequence` is only supported
+  // for functions of void return type.
+  template <typename... Args>
+  void define_as_call_sequence(
+      dynamic_function<void, Args...> call,
+      const std::vector<dynamic_function_definition<void, Args...>>
+          &definitions)
+
+  // Set the definition of `func` to be provided by a sequence of calls to the functions
+  // provided in `definitions`. Note that `define_as_call_sequence` is only supported
+  // for functions of void return type.
+  //
+  // In most cases, the type-safe other overloads should be used instead of this one.
+  // However, this function can be useful when type-erasure of the functions is explicitly
+  // desired; e.g. when in a larger framework many function ids need to be stored
+  // in a central location.
+  void
+  define_as_call_sequence(dynamic_function_id func,
+                          const std::vector<dynamic_function_id> &definitions) 
+
+  // Returns a kernel object that has this configuration applied. The resulting object
+  // can then be passed e.g. to parallel_for().
+  template<class Kernel>
+  auto apply(Kernel k);
+};
+
+}
+```
+
 ### `ACPP_EXT_SPECIALIZED`
 
 This extension adds a mechanism to hint to the SSCP JIT compiler that a kernel specialization should be generated. That is, when `sycl::specialized<T>` is passed as a kernel argument, the compiler will generate a kernel with the value of the object stored in the `specialized` wrapper hardcoded as a constant. This addresses the same problem as SYCL 2020 specialization constants, however it provides two major benefits:
@@ -172,6 +555,10 @@ struct AdaptiveCpp_retarget {
 };
 
 }
+
+namespace sycl::property::queue {
+struct AdaptiveCpp_retargetable {};
+}
 ```
 
 ##### Description
@@ -187,6 +574,8 @@ Compared to using multiple queues bound to different devices, using a single que
 
 * A single `queue::wait()` call guarantees that all operations submitted to the queue, no matter to which device they were retargeted, have completed. With multiple queues on the other hand, multiple `wait()` calls are necessary which can add some overhead.
 * If the queue is an in-order queue, the in-order property is *preserved even if the operations are retargeted to run on different devices*. This can be a highly convenient way to formulate in-order USM algorithms that require processing steps on different devices.
+
+The `AdaptiveCpp_retarget` property can only be used with queues that have been constructed with the `AdaptiveCpp_retargetable` property.
 
 
 #### `ACPP_EXT_CG_PROPERTY_PREFER_EXECUTION_LANE`

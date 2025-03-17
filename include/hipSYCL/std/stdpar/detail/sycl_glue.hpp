@@ -1,30 +1,13 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2023 Aksel Alpay
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
+// SPDX-License-Identifier: BSD-2-Clause
 #ifndef HIPSYCL_PSTL_SYCL_GLUE_HPP
 #define HIPSYCL_PSTL_SYCL_GLUE_HPP
 
@@ -49,6 +32,7 @@
 
 
 #include "allocation_map.hpp"
+#include "hipSYCL/runtime/application.hpp"
 #include "offload_heuristic_db.hpp"
 #include "hipSYCL/runtime/settings.hpp"
 #include "hipSYCL/sycl/info/device.hpp"
@@ -79,7 +63,16 @@ private:
       : _queue{construct_default_queue()},
         _device_scratch_cache{algorithms::util::allocation_type::device},
         _shared_scratch_cache{algorithms::util::allocation_type::shared},
-        _host_scratch_cache{algorithms::util::allocation_type::host} {}
+        _host_scratch_cache{algorithms::util::allocation_type::host} {
+          auto dev = _queue.get_device().AdaptiveCpp_device_id();
+          auto* be = _queue.get_context().AdaptiveCpp_runtime()->backends().get(
+              dev.get_backend());
+          if (be->get_hardware_manager()
+                  ->get_device(dev.get_id())
+                  ->has(rt::device_support_aspect::
+                            work_item_independent_forward_progress))
+            _has_independent_work_item_forward_progress = true;
+        }
 
   ~stdpar_tls_runtime() {
     _device_scratch_cache.purge();
@@ -92,6 +85,7 @@ private:
   algorithms::util::allocation_cache _shared_scratch_cache;
   algorithms::util::allocation_cache _host_scratch_cache;
   int _outstanding_offloaded_operations = 0;
+  bool _has_independent_work_item_forward_progress = false;
 
   offload_heuristic_db _offload_db;
   std::vector<uint64_t, libc_allocator<uint64_t>> _instrumented_ops_in_batch;
@@ -119,6 +113,10 @@ public:
     return _queue;
   }
 
+  bool device_has_work_item_independent_forward_progress() const {
+    return _has_independent_work_item_forward_progress;
+  }
+
   int get_num_outstanding_operations() const {
     return _outstanding_offloaded_operations;
   }
@@ -139,7 +137,7 @@ public:
   }
 
   void finalize_offloading_batch() noexcept {
-#ifndef __HIPSYCL_STDPAR_UNCONDITIONAL_OFFLOAD__
+#ifndef __ACPP_STDPAR_UNCONDITIONAL_OFFLOAD__
     uint64_t batch_end = get_time_now();
     double mean_time = static_cast<double>(batch_end - _batch_start_timestamp) /
                        _instrumented_ops_in_batch.size();
@@ -192,8 +190,8 @@ public:
 
 }
 
-#if defined(__clang__) && defined(HIPSYCL_LIBKERNEL_IS_DEVICE_PASS_HOST) &&    \
-    !defined(__HIPSYCL_STDPAR_ASSUME_SYSTEM_USM__)
+#if defined(__clang__) && defined(ACPP_LIBKERNEL_IS_DEVICE_PASS_HOST) &&    \
+    !defined(__ACPP_STDPAR_ASSUME_SYSTEM_USM__)
 
 namespace hipsycl::stdpar::detail {
 
@@ -255,6 +253,15 @@ public:
       assert(is_from_pool(ptr));
       assert(is_from_pool((char*)ptr+size));
       assert((uint64_t)ptr % _page_size == 0);
+
+      // Inform the runtime that there is a new user allocation
+      // by invoking the runtime hook. We need to do this manually
+      // because memory pool directly uses raw backend allocation commands.
+      rt::application::event_handler_layer().on_new_allocation(
+          ptr, size,
+          rt::allocation_info{_dev,
+                              rt::allocation_info::allocation_type::shared});
+
       return ptr;
     }
 
@@ -265,14 +272,14 @@ public:
     if(_pool && is_from_pool(ptr)) {
       uint64_t address = reinterpret_cast<uint64_t>(ptr)-reinterpret_cast<uint64_t>(_base_address);
       _free_space_map.release(address, size);
+
+      rt::application::event_handler_layer().on_deallocation(ptr);
     }
   }
 
   ~memory_pool() {
     // Memory pool might be destroyed after runtime shutdown, so rely on OS
     // to clean up for now
-    //if(_pool)
-    //  sycl::free(_pool, detail::single_device_dispatch::get_queue());
   }
 
   std::size_t get_size() const {
@@ -288,13 +295,25 @@ public:
   }
 private:
 
+  void* raw_malloc_shared(std::size_t bytes, sycl::queue& q) {
+    auto *allocator = sycl::detail::select_usm_allocator(q.get_context(),
+                                                         q.get_device());
+    return allocator->raw_allocate_usm(bytes);
+  }
+
   void init() {
     HIPSYCL_DEBUG_INFO << "[stdpar] Building a memory pool of size "
                        << static_cast<double>(_pool_size) / (1024 * 1024 * 1024)
                        << " GB" << std::endl;
+    auto& q = detail::single_device_dispatch::get_queue();
+    _dev = q.get_device().AdaptiveCpp_device_id();
+
+    // We need to call raw_allocate_usm so that we can inform the runtime's allocation
+    // tracking mechanism of actual user allocations, not just of the memory pool as a 
+    // whole.
     // Make sure to allocate an additional page so that we can fix alignment if needed
-    _pool = sycl::malloc_shared(
-        _pool_size + _page_size, detail::single_device_dispatch::get_queue());
+    _pool = raw_malloc_shared(_pool_size + _page_size, q);
+
     uint64_t aligned_pool_base = next_multiple_of((uint64_t)_pool, _page_size);
     _base_address = (void*)aligned_pool_base;
     assert(aligned_pool_base % _page_size == 0);
@@ -306,6 +325,7 @@ private:
   void* _base_address;
   free_space_map _free_space_map;
   std::size_t _page_size;
+  rt::device_id _dev;
 };
 
 class unified_shared_memory {

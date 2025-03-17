@@ -4,7 +4,7 @@ AdaptiveCpp supports automatic offloading of C++ standard algorithms.
 
 ## Installation & dependencies
 
-C++ standard parallelism offload requires LLVM >= 14. It is automatically enabled when a sufficiently new LLVM is detected. `cmake -DWITH_STDPAR_COMPILER=ON/OFF` can be used to explicitly enable or disable it at cmake configure time.
+C++ standard parallelism offload requires LLVM >= 14. It is automatically enabled when a sufficiently new LLVM is detected. Requires `cmake -DACPP_COMPILER_FEATURE_PROFILE=full` (this is the default setting) at cmake configure time.
 C++ standard parallelism offload currently is only supported in conjunction with `libstdc++` >= 11. Other standard C++ standard library versions may or may not work. Support for `libc++` is likely easy to add if there is demand.
 
 ## Using accelerated C++ standard parallelism
@@ -17,6 +17,7 @@ AdaptiveCpp by default uses some experimental heuristics to determine if a probl
 
 Currently, the following execution policies qualify for offloading:
 * `par_unseq`
+* `par` (experimental; will only be offloaded on hardware that provides independent work item forward progress guarantees such as recent NVIDIA GPUs)
 
 Offloading is implemented for the following STL algorithms:
 
@@ -41,7 +42,12 @@ Offloading is implemented for the following STL algorithms:
 |`any_of` | |
 |`all_of` | |
 |`none_of` | |
-
+|`merge` | |
+|`sort` | may not scale optimally for large problems |
+|`inclusive_scan` | |
+|`exclusive_scan` | |
+|`transform_inclusive_scan` | |
+|`transform_exclusive_scan` | |
 
 For all other execution policies or algorithms, the algorithm will compile and execute correctly, however the regular host implementation of the algorithm provided by the C++ standard library implementation will be invoked and no offloading takes place.
 
@@ -112,3 +118,5 @@ If you are on a system that supports system-level USM, i.e. a system where every
 The functionality supported in device code aligns with the kernel restrictions from SYCL. This means that no exceptions, dynamic polymorphism, dynamic memory management, or calls to external shared libraries are allowed. Note that this functionality might already be prohibited in the C++ `par_unseq` model anyway.
 
 The `std::` math functions are supported in device code in an experimental state when using the generic SSCP compilation flow (`--acpp-targets=generic`). This is accomplished using a dedicated compiler pass that maps standard functions to our SSCP builtins.
+
+When using the `par` execution policy, `std::atomic` and `std::atomic_ref` support in device code is available when using the generic SSCP compilation flow (`--acpp-targets=generic`), but experimental.

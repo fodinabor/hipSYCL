@@ -1,30 +1,13 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2018-2021 Aksel Alpay
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
+// SPDX-License-Identifier: BSD-2-Clause
 #ifndef HIPSYCL_MEMORY_ENVIRONMENT_HPP
 #define HIPSYCL_MEMORY_ENVIRONMENT_HPP
 
@@ -42,19 +25,19 @@ namespace memory_environment {
 
 
 template<class First, typename... Rest>
-HIPSYCL_UNIVERSAL_TARGET
+ACPP_UNIVERSAL_TARGET
 First get_first(First&& f, Rest&&...) noexcept {
   return f;
 }
 
 template<class F, class First, typename... Rest>
-HIPSYCL_UNIVERSAL_TARGET
+ACPP_UNIVERSAL_TARGET
 void remove_first(F&& f, First&&, Rest&&... r) noexcept {
   f(r...);
 }
 
 template<class First, typename... Args>
-HIPSYCL_UNIVERSAL_TARGET
+ACPP_UNIVERSAL_TARGET
 auto get_last(First&& f, Args&&... args) noexcept {
   if constexpr(sizeof...(args) == 0) {
     return f;
@@ -133,7 +116,7 @@ T* aligned_alloca_offset(void* allocation) {
 
 
 template <class Group, class FirstArg, typename... RestArgs>
-HIPSYCL_KERNEL_TARGET
+ACPP_KERNEL_TARGET
 void memory_environment_host(const Group &g, FirstArg &&first,
                         RestArgs &&...rest) noexcept {
 
@@ -194,7 +177,7 @@ void memory_environment_host(const Group &g, FirstArg &&first,
 }
 
 template <class Group, class FirstArg, typename... RestArgs>
-HIPSYCL_KERNEL_TARGET
+ACPP_KERNEL_TARGET
 void memory_environment_device(const Group &g, FirstArg &&first,
                               RestArgs &&...rest) noexcept {
 
@@ -218,7 +201,7 @@ void memory_environment_device(const Group &g, FirstArg &&first,
     
     if constexpr(request_type::alloc_type == 
         allocation_type::local_mem){
-#if HIPSYCL_LIBKERNEL_IS_DEVICE_PASS_CUDA || HIPSYCL_LIBKERNEL_IS_DEVICE_PASS_HIP
+#if ACPP_LIBKERNEL_IS_DEVICE_PASS_CUDA || ACPP_LIBKERNEL_IS_DEVICE_PASS_HIP
       __shared__ value_type memory_declaration;
 #else // SSCP
       // TODO
@@ -268,14 +251,14 @@ void memory_environment_device(const Group &g, FirstArg &&first,
 } // detail
 
 template <class T>
-HIPSYCL_KERNEL_TARGET
+ACPP_KERNEL_TARGET
 auto require_local_mem() noexcept {
   using namespace detail::memory_environment;
   return memory_allocation_request<T, allocation_type::local_mem, false>{};
 }
 
 template <class T>
-HIPSYCL_KERNEL_TARGET auto require_local_mem(
+ACPP_KERNEL_TARGET auto require_local_mem(
     detail::memory_environment::array_scalar_t<T> init_value) noexcept {
   using namespace detail::memory_environment;
   
@@ -284,14 +267,14 @@ HIPSYCL_KERNEL_TARGET auto require_local_mem(
 }
 
 template <class T>
-HIPSYCL_KERNEL_TARGET
+ACPP_KERNEL_TARGET
 auto require_private_mem() noexcept {
   using namespace detail::memory_environment;
   return memory_allocation_request<T, allocation_type::private_mem, false>{};
 }
 
 template <class T>
-HIPSYCL_KERNEL_TARGET auto require_private_mem(
+ACPP_KERNEL_TARGET auto require_private_mem(
     detail::memory_environment::array_scalar_t<T> init_value) noexcept {
   using namespace detail::memory_environment;
   
@@ -300,7 +283,7 @@ HIPSYCL_KERNEL_TARGET auto require_private_mem(
 }
 
 template <class Group, class FirstArg, typename... RestArgs>
-HIPSYCL_KERNEL_TARGET
+ACPP_KERNEL_TARGET
 void memory_environment(const Group &g, FirstArg &&first,
                         RestArgs &&...rest) noexcept {
   __acpp_if_target_device(
@@ -312,13 +295,13 @@ void memory_environment(const Group &g, FirstArg &&first,
 }
 
 template<class T, class Group, class Function>
-HIPSYCL_KERNEL_TARGET
+ACPP_KERNEL_TARGET
 void local_memory_environment(const Group& g, Function&& f) noexcept {
   memory_environment(g, require_local_mem<T>(), f);
 }
 
 template<class T, class Group, class Function>
-HIPSYCL_KERNEL_TARGET
+ACPP_KERNEL_TARGET
 void private_memory_environment(const Group& g, Function&& f) noexcept {
   memory_environment(g, require_private_mem<T>(), f);
 }

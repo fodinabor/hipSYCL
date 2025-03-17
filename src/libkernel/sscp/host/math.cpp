@@ -1,31 +1,14 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2019-2022 Aksel Alpay
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
-#include <math.h>
+// SPDX-License-Identifier: BSD-2-Clause
+#include <cmath>
 
 #include "hipSYCL/sycl/libkernel/sscp/builtins/builtin_config.hpp"
 #include "hipSYCL/sycl/libkernel/sscp/builtins/math.hpp"
@@ -172,11 +155,8 @@ HIPSYCL_SSCP_BUILTIN float __acpp_sscp_frexp_f32(float x,
   return frexpf(x, y);
 }
 HIPSYCL_SSCP_BUILTIN double __acpp_sscp_frexp_f64(double x,
-                                                     __acpp_int64 *y) {
-  __acpp_int32 w;
-  auto res = frexp(x, &w);
-  *y = w;
-  return res;
+                                                     __acpp_int32 *y) {
+  return frexp(x, y);
 }
 
 HIPSYCL_SSCP_MAP_HOST_FLOAT_BUILTIN2(hypot)
@@ -188,7 +168,7 @@ HIPSYCL_SSCP_BUILTIN float __acpp_sscp_ldexp_f32(float x,
 }
 
 HIPSYCL_SSCP_BUILTIN double __acpp_sscp_ldexp_f64(double x,
-                                                     __acpp_int64 k) {
+                                                     __acpp_int32 k) {
   return ldexp(x, k);
 }
 
@@ -197,14 +177,11 @@ HIPSYCL_SSCP_MAP_HOST_FLOAT_BUILTIN(lgamma)
 
 
 HIPSYCL_SSCP_BUILTIN float __acpp_sscp_lgamma_r_f32(float x, __acpp_int32* y ) {
-  return lgammaf_r(x,y);
+  return lgammaf_r(x, y);
 }
 
-HIPSYCL_SSCP_BUILTIN double __acpp_sscp_lgamma_r_f64(double x, __acpp_int64* y) {
-  __acpp_int32 w;
-  auto res = lgamma_r(x,&w);
-  *y = w;
-  return res;
+HIPSYCL_SSCP_BUILTIN double __acpp_sscp_lgamma_r_f64(double x, __acpp_int32* y) {
+  return lgamma_r(x, y);
 }
 
 HIPSYCL_SSCP_MAP_HOST_FLOAT_BUILTIN(log)
@@ -232,7 +209,7 @@ HIPSYCL_SSCP_BUILTIN float __acpp_sscp_pown_f32(float x, __acpp_int32 y) {
   return __acpp_sscp_pow_f32(x, (float)y);
 }
 HIPSYCL_SSCP_BUILTIN double __acpp_sscp_pown_f64(double x,
-                                                    __acpp_int64 y) {
+                                                    __acpp_int32 y) {
   return __acpp_sscp_pow_f64(x, (double)y);
 }
 
@@ -244,7 +221,7 @@ HIPSYCL_SSCP_BUILTIN float __acpp_sscp_rootn_f32(float x,
   return __acpp_sscp_pow_f32(x, 1.f/static_cast<float>(y));
 }
 HIPSYCL_SSCP_BUILTIN double __acpp_sscp_rootn_f64(double x,
-                                                     __acpp_int64 y) {
+                                                     __acpp_int32 y) {
   return __acpp_sscp_pow_f64(x, 1./static_cast<double>(y));
 }
 

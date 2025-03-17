@@ -1,33 +1,16 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2018 Aksel Alpay
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice,
- *    this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
+// SPDX-License-Identifier: BSD-2-Clause
 
-#ifndef HIPSYCL_LIBKERNEL_DEVICE_GROUP_FUNCTIONS_HPP
-#define HIPSYCL_LIBKERNEL_DEVICE_GROUP_FUNCTIONS_HPP
+#ifndef ACPP_LIBKERNEL_DEVICE_GROUP_FUNCTIONS_HPP
+#define ACPP_LIBKERNEL_DEVICE_GROUP_FUNCTIONS_HPP
 
 #include "../../backend.hpp"
 #include "../../detail/data_layout.hpp"
@@ -38,8 +21,8 @@
 #include "warp_shuffle.hpp"
 #include <type_traits>
 
-#if HIPSYCL_LIBKERNEL_IS_DEVICE_PASS_CUDA ||                                   \
-    HIPSYCL_LIBKERNEL_IS_DEVICE_PASS_HIP
+#if ACPP_LIBKERNEL_IS_DEVICE_PASS_CUDA ||                                   \
+    ACPP_LIBKERNEL_IS_DEVICE_PASS_HIP
 
 namespace hipsycl {
 namespace sycl::detail::hiplike_builtins {
@@ -382,7 +365,7 @@ __device__ OutPtr __acpp_joint_inclusive_scan(Group g, InPtr first,
                                                  InPtr last, OutPtr result,
                                                  BinaryOperation binary_op,
                                                  T init) {
-  using OutT = std::remove_pointer_t<OutPtr>;
+  using OutT = std::remove_reference_t<decltype(*result)>;
 
   auto         lid          = g.get_local_linear_id();
   auto         wid          = lid / __acpp_warp_size;
@@ -418,7 +401,7 @@ template <typename Group, typename InPtr, typename OutPtr,
 __device__ OutPtr __acpp_joint_inclusive_scan(Group g, InPtr first,
                                                  InPtr last, OutPtr result,
                                                  BinaryOperation binary_op) {
-  using OutT = std::remove_pointer_t<OutPtr>;
+  using OutT = std::remove_reference_t<decltype(*result)>;
 
   auto         lid          = g.get_local_linear_id();
   auto         wid          = lid / __acpp_warp_size;
@@ -535,8 +518,9 @@ template <typename Group, typename InPtr, typename OutPtr,
 __device__ OutPtr __acpp_joint_exclusive_scan(Group g, InPtr first,
                                                  InPtr last, OutPtr result,
                                                  BinaryOperation binary_op) {
+  using OutT = std::remove_reference_t<decltype(*result)>;
   return __acpp_joint_exclusive_scan(
-      g, first, last, result, typename std::remove_pointer_t<OutPtr>{},
+      g, first, last, result, OutT{},
       binary_op);
 }
 
@@ -673,5 +657,5 @@ __device__ T __acpp_select_from_group(
 } // namespace hipsycl
 
 #endif
-#endif // HIPSYCL_LIBKERNEL_DEVICE_GROUP_FUNCTIONS_HPP
+#endif // ACPP_LIBKERNEL_DEVICE_GROUP_FUNCTIONS_HPP
 

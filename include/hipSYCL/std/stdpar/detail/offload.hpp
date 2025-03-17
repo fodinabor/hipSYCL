@@ -1,30 +1,13 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2023 Aksel Alpay
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
+// SPDX-License-Identifier: BSD-2-Clause
 #ifndef HIPSYCL_PSTL_OFFLOAD_HPP
 #define HIPSYCL_PSTL_OFFLOAD_HPP
 
@@ -148,8 +131,8 @@ enum prefetch_mode {
 };
 
 inline prefetch_mode get_prefetch_mode() noexcept {
-#ifdef __HIPSYCL_STDPAR_PREFETCH_MODE__
-  prefetch_mode mode = static_cast<prefetch_mode>(__HIPSYCL_STDPAR_PREFETCH_MODE__);
+#ifdef __ACPP_STDPAR_PREFETCH_MODE__
+  prefetch_mode mode = static_cast<prefetch_mode>(__ACPP_STDPAR_PREFETCH_MODE__);
 #else
   auto determine_prefetch_mode = [&]() -> prefetch_mode {
     std::string prefetch_mode_string;
@@ -201,7 +184,7 @@ void prepare_offloading(AlgorithmType type, Size problem_size, const Args&... ar
   std::size_t current_batch_id = stdpar::detail::stdpar_tls_runtime::get()
                                      .get_current_offloading_batch_id();
 
-#ifndef __HIPSYCL_STDPAR_ASSUME_SYSTEM_USM__
+#ifndef __ACPP_STDPAR_ASSUME_SYSTEM_USM__
   // Use "first" mode in case of automatic prefetch decision for now
   const auto prefetch_mode =
       (get_prefetch_mode() == prefetch_mode::automatic) ? prefetch_mode::first
@@ -400,9 +383,15 @@ private:
 
 template <class AlgorithmType, class Size, typename... Args>
 bool should_offload(AlgorithmType type, Size n, const Args &...args) {
+  if constexpr (std::is_same_v<typename AlgorithmType::execution_policy,
+                               hipsycl::stdpar::par>) {
+    if (!detail::stdpar_tls_runtime::get()
+             .device_has_work_item_independent_forward_progress())
+      return false;
+  }
   // If we have system USM, no need to validate pointers as all
   // will be automatically valid.
-#if !defined(__HIPSYCL_STDPAR_ASSUME_SYSTEM_USM__)
+#if !defined(__ACPP_STDPAR_ASSUME_SYSTEM_USM__)
   if(!validate_all_pointers(args...)) {
     HIPSYCL_DEBUG_WARNING << "Detected pointers that are not valid device "
                              "pointers; not offloading stdpar call.\n";
@@ -410,7 +399,7 @@ bool should_offload(AlgorithmType type, Size n, const Args &...args) {
   }
 #endif
 
-#ifdef __HIPSYCL_STDPAR_UNCONDITIONAL_OFFLOAD__
+#ifdef __ACPP_STDPAR_UNCONDITIONAL_OFFLOAD__
   return true;
 #else
 
@@ -450,7 +439,7 @@ bool should_offload(AlgorithmType type, Size n, const Args &...args) {
     // Instead of hardcoding peak PCIe speeds, this should be measured
     double data_transfer_time_estimate = 0;
 
-#if !defined(__HIPSYCL_STDPAR_ASSUME_SYSTEM_USM__)
+#if !defined(__ACPP_STDPAR_ASSUME_SYSTEM_USM__)
     std::size_t used_memory = 0;
     for_each_contained_pointer([&](void* ptr){
       unified_shared_memory::allocation_lookup_result lookup_result;
@@ -585,7 +574,7 @@ private:
 
 template<class AlgorithmType, class Size, class F, typename... Args>
 auto host_instrumentation(F&& f, AlgorithmType t, Size n, Args... args) {
-#ifndef __HIPSYCL_STDPAR_UNCONDITIONAL_OFFLOAD__
+#ifndef __ACPP_STDPAR_UNCONDITIONAL_OFFLOAD__
   uint64_t hash = get_operation_hash(t, n, args...);
   host_invocation_measurement m{hash, n};
   return m(f);
@@ -596,7 +585,7 @@ auto host_instrumentation(F&& f, AlgorithmType t, Size n, Args... args) {
 
 template<class AlgorithmType, class Size, class F, typename... Args>
 auto device_instrumentation(F&& f, AlgorithmType t, Size n, Args... args) {
-#ifndef __HIPSYCL_STDPAR_UNCONDITIONAL_OFFLOAD__
+#ifndef __ACPP_STDPAR_UNCONDITIONAL_OFFLOAD__
   uint64_t hash = get_operation_hash(t, n, args...);
   device_invocation_measurement m{hash, n};
   return m(f);

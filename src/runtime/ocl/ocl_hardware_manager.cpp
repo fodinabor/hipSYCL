@@ -1,30 +1,13 @@
 /*
- * This file is part of hipSYCL, a SYCL implementation based on CUDA/HIP
+ * This file is part of AdaptiveCpp, an implementation of SYCL and C++ standard
+ * parallelism for CPUs and GPUs.
  *
- * Copyright (c) 2023 Aksel Alpay
- * All rights reserved.
+ * Copyright The AdaptiveCpp Contributors
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * AdaptiveCpp is released under the BSD 2-Clause "Simplified" License.
+ * See file LICENSE in the project root for full license details.
  */
-
+// SPDX-License-Identifier: BSD-2-Clause
 #include "hipSYCL/runtime/application.hpp"
 #include "hipSYCL/runtime/device_id.hpp"
 #include "hipSYCL/runtime/error.hpp"
@@ -169,7 +152,7 @@ bool should_include_device(const std::string& dev_name, const cl::Device& dev) {
       info_query<CL_DEVICE_SVM_CAPABILITIES, cl_device_svm_capabilities>(dev);
 
   bool has_usm_extension = info_query<CL_DEVICE_EXTENSIONS, std::string>(dev).find("cl_intel_unified_shared_memory") != std::string::npos;
-  bool has_system_svm = !(cap & CL_DEVICE_SVM_FINE_GRAIN_SYSTEM);
+  bool has_system_svm = cap & CL_DEVICE_SVM_FINE_GRAIN_SYSTEM;
 
   if(!has_usm_extension && !has_system_svm) {
     HIPSYCL_DEBUG_WARNING << "ocl_hardware_manager: OpenCL device '" << dev_name
@@ -283,7 +266,7 @@ bool ocl_hardware_context::has(device_support_aspect aspect) const {
     return this->_usm_provider->has_usm_system_allocations();
     break;
   case device_support_aspect::execution_timestamps:
-    return true;
+    return false;
     break;
   case device_support_aspect::sscp_kernels:
 #ifdef HIPSYCL_WITH_SSCP_COMPILER
@@ -292,6 +275,9 @@ bool ocl_hardware_context::has(device_support_aspect aspect) const {
 #else
     return false;
 #endif
+    break;
+  case device_support_aspect::work_item_independent_forward_progress:
+    return false;
     break;
   }
   assert(false && "Unknown device aspect");
@@ -483,6 +469,13 @@ std::size_t ocl_hardware_context::get_property(device_uint_property prop) const 
     return static_cast<std::size_t>(
         info_query<CL_DEVICE_VENDOR_ID, cl_uint>(_dev));
     break;
+  case device_uint_property::architecture:
+    // TODO
+    return 0;
+    break;
+  case device_uint_property::backend_id:
+    return static_cast<int>(backend_id::ocl);
+    break;
   }
   assert(false && "Invalid device property");
   std::terminate();
@@ -493,13 +486,29 @@ ocl_hardware_context::get_property(device_uint_list_property prop) const {
   switch (prop) {
   case device_uint_list_property::sub_group_sizes:
     // TODO - there does not seem to be a direct query for this.
-    // The current implementation is a hack and might not return
-    // all possible subgroup sizes.
+    // So we return all power of two values between 1 and
+    // the max workgroup size. The latter corresponds to the case when there is
+    // only a single subgroup for the whole work group.
+    // Unfortunately there does not seem to be a good way to get a min bound.
+    //
+    // This is a heuristic that returns all possible subgroup sizes, but may
+    // also return values that are not actually possible as subgroups.
     std::size_t max_num_sub_groups =
         get_property(device_uint_property::max_num_sub_groups);
-    return std::vector<std::size_t>{
-        get_property(device_uint_property::max_group_size) /
-        max_num_sub_groups};
+    std::size_t max_group_size =
+        get_property(device_uint_property::max_group_size);
+    
+    auto min_bound = 1;
+    auto max_bound = std::max(max_num_sub_groups, max_group_size);
+
+    std::vector<std::size_t> result;
+
+    for(std::size_t i = 1; i < max_bound; i *= 2) {
+      if(i >= min_bound)
+        result.push_back(i);
+    }
+
+    return result;
     break;
   }
   assert(false && "Invalid device property");
@@ -559,7 +568,18 @@ void ocl_hardware_context::init_allocator(ocl_hardware_manager *mgr) {
                              "allocations are not possible on that device."
                           << std::endl;
   }
-  _alloc = ocl_allocator{_usm_provider.get()};
+  device_id dev{
+      backend_descriptor{hardware_platform::ocl, api_platform::ocl},
+      _dev_id};
+  _alloc = ocl_allocator{dev, _usm_provider.get()};
+}
+
+std::size_t ocl_hardware_context::get_platform_index() const {
+  return static_cast<std::size_t>(_platform_id);
+}
+
+std::size_t ocl_hardware_manager::get_num_platforms() const {
+  return _platforms.size();
 }
 
 ocl_hardware_manager::ocl_hardware_manager()
