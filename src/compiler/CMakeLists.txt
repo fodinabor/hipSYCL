@@ -17,6 +17,7 @@ endif()
 if(WITH_ACCELERATED_CPU OR WITH_SSCP_COMPILER)
   set(CBS_PLUGIN cbs/LoopSplitterInlining.cpp
     cbs/SplitterAnnotationAnalysis.cpp
+    cbs/CBSIntrinsics.cpp
     cbs/IRUtils.cpp
     cbs/KernelFlattening.cpp
     cbs/LoopsParallelMarker.cpp
