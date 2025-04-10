@@ -158,9 +158,9 @@ template <typename T, std::enable_if_t<std::is_integral_v<T>, bool> = true> cons
   case __acpp_sscp_algorithm_op::bit_xor:
     return x ^ y;
   case __acpp_sscp_algorithm_op::logical_and:
-    return x and y;
+    return x && y;
   case __acpp_sscp_algorithm_op::logical_or:
-    return x or y;
+    return x || y;
   }
   assert(false);
   return {};
@@ -177,9 +177,9 @@ template <typename T, std::enable_if_t<! std::is_integral_v<T>, bool> = true> co
   case __acpp_sscp_algorithm_op::max:
     return std::max(x, y);
   case __acpp_sscp_algorithm_op::logical_and:
-    return x and y;
+    return x && y;
   case __acpp_sscp_algorithm_op::logical_or:
-    return x or y;
+    return x || y;
   case __acpp_sscp_algorithm_op::bit_and:
   case __acpp_sscp_algorithm_op::bit_or:
   case __acpp_sscp_algorithm_op::bit_xor:
@@ -497,7 +497,7 @@ template <typename T> T work_inclusive_scan(__acpp_sscp_algorithm_op op, T x) {
 
 #define SELECT(LEVEL, T, TNAME)                                                                    \
   HIPSYCL_SSCP_CONVERGENT_BUILTIN __acpp_##T __acpp_sscp_##LEVEL##_group_select_##TNAME(           \
-      __acpp_##T x, __acpp_uint32 id) {                                                         \
+      __acpp_##T x, __acpp_int32 id) {                                                         \
     return LEVEL##_select(x, id);                                                               \
   };
 

@@ -47,11 +47,11 @@ struct bit_xor {
 };
 
 struct logical_and {
-  template <typename T> T operator()(T lhs, T rhs) { return lhs and rhs; }
+  template <typename T> T operator()(T lhs, T rhs) { return lhs && rhs; }
 };
 
 struct logical_or {
-  template <typename T> T operator()(T lhs, T rhs) { return lhs or rhs; }
+  template <typename T> T operator()(T lhs, T rhs) { return lhs || rhs; }
 };
 
 template <__acpp_sscp_algorithm_op op> struct get_op {};

@@ -113,34 +113,34 @@ __acpp_int64 __acpp_sscp_work_group_permute_i64(__acpp_int64 value,
 
 HIPSYCL_SSCP_CONVERGENT_BUILTIN
 __acpp_int8 __acpp_sscp_sub_group_select_i8(__acpp_int8 value,
-                                            __acpp_uint32 id);
+                                            __acpp_int32 id);
 
 HIPSYCL_SSCP_CONVERGENT_BUILTIN
 __acpp_int16 __acpp_sscp_sub_group_select_i16(__acpp_int16 value,
-                                              __acpp_uint32 id);
+                                              __acpp_int32 id);
 
 HIPSYCL_SSCP_CONVERGENT_BUILTIN
 __acpp_int32 __acpp_sscp_sub_group_select_i32(__acpp_int32 value,
-                                              __acpp_uint32 id);
+                                              __acpp_int32 id);
 
 HIPSYCL_SSCP_CONVERGENT_BUILTIN
 __acpp_int64 __acpp_sscp_sub_group_select_i64(__acpp_int64 value,
-                                              __acpp_uint32 id);
+                                              __acpp_int32 id);
 
 HIPSYCL_SSCP_CONVERGENT_BUILTIN
 __acpp_int8 __acpp_sscp_work_group_select_i8(__acpp_int8 value,
-                                             __acpp_uint32 id);
+                                             __acpp_int32 id);
 
 HIPSYCL_SSCP_CONVERGENT_BUILTIN
 __acpp_int16 __acpp_sscp_work_group_select_i16(__acpp_int16 value,
-                                               __acpp_uint32 id);
+                                               __acpp_int32 id);
 
 HIPSYCL_SSCP_CONVERGENT_BUILTIN
 __acpp_int32 __acpp_sscp_work_group_select_i32(__acpp_int32 value,
-                                               __acpp_uint32 id);
+                                               __acpp_int32 id);
 
 HIPSYCL_SSCP_CONVERGENT_BUILTIN
 __acpp_int64 __acpp_sscp_work_group_select_i64(__acpp_int64 value,
-                                               __acpp_uint32 id);
+                                               __acpp_int32 id);
 
 #endif

@@ -33,7 +33,7 @@ __acpp_sscp_work_group_barrier(__acpp_sscp_memory_scope fence_scope,
 HIPSYCL_SSCP_CONVERGENT_BUILTIN void
 __acpp_sscp_sub_group_barrier(__acpp_sscp_memory_scope fence_scope,
                               __acpp_sscp_memory_order order) {
-#if not USE_RV
+#if !USE_RV
   __acpp_cbs_sub_barrier();
 #endif
   __acpp_cpu_mem_fence(fence_scope, order);

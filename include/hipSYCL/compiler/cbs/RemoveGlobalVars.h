@@ -14,7 +14,7 @@
 #include <llvm/IR/LegacyPassManagers.h>
 #include <llvm/IR/PassManager.h>
 #include "hipSYCL/compiler/cbs/IRUtils.hpp"
-#include <optional>
+#include "hipSYCL/common/debug.hpp"
 
 namespace hipsycl {
 namespace compiler {
@@ -52,16 +52,16 @@ public:
 
       if (GV->getNumUses() == 0 ||
           std::none_of(GV->user_begin(), GV->user_end(), [GV](llvm::User *U) { return U != GV; })) {
-        llvm::outs() << "[RemoveBarrierCalls] Clean-up global variable " << *GV << "\n";
+        HIPSYCL_DEBUG_INFO << "[RemoveGlobalVars] Clean-up global variable " << *GV << "\n";
         GV->eraseFromParent();
         return;
       }
 
-      llvm::outs() << "[RemoveBarrierCalls] Global variable still in use " << VarName << "\n";
+      HIPSYCL_DEBUG_INFO << "[RemoveGlobalVars] Global variable still in use " << VarName << "\n";
       for (auto *U : GV->users()) {
-        llvm::outs() << "[RemoveBarrierCalls] >>> " << *U;
+        HIPSYCL_DEBUG_INFO << "[RemoveGlobalVars] >>> " << *U;
         if (auto I = llvm::dyn_cast<llvm::Instruction>(U)) {
-            llvm::outs() << " in " << I->getFunction()->getName();
+          HIPSYCL_DEBUG_EXECUTE_INFO(llvm::outs() << " in " << I->getFunction()->getName(););
         }
       }
     }

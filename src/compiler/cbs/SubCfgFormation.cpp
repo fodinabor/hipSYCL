@@ -56,8 +56,8 @@ namespace hipsycl::compiler::cbs {
     size_t Dim;
     llvm::Type *SizeT;
     std::array<char, 3> DimName = {'x', 'y', 'z'};
-    std::array<const char*, 3> LocalIdGlobalNames = LocalIdGlobalNames;
-    std::array<const char*, 3> LocalSizeGlobalNames = LocalSizeGlobalNames;
+    std::array<const char*, 3> LocalIdGlobalNames = ::hipsycl::compiler::cbs::LocalIdGlobalNames;
+    std::array<const char*, 3> LocalSizeGlobalNames = ::hipsycl::compiler::cbs::LocalSizeGlobalNames;
   };
 
   llvm::LoadInst *mergeGVLoadsInEntry(llvm::Function &F, llvm::StringRef VarName,
@@ -324,7 +324,7 @@ void createLoopsAround(llvm::Function &F, llvm::BasicBlock *AfterBB,
 
     llvm::Value *LoopCond = Builder.CreateICmpULT(IncIndVar, LocalSize[D], "exit.cond." + Suffix);
 
-#if not USE_RV
+#if !USE_RV
     if (HI.Level == HierarchicalLevel::H_CBS_SUBGROUP) {
       assert(D == InnerMost);
       // Here, we need to use IncIndVar because we are in the loop latch and want
@@ -1721,7 +1721,7 @@ void formSubCfgs(llvm::Function &F, llvm::LoopInfo &LI, llvm::DominatorTree &DT,
     assert(!utils::hasSubBarriers(F, SAA));
   }
 
-  const bool PerformHCBS = utils::hasSubBarriers(F, SAA) or ALWAYS_CREATE_SUBGROUP_SUB_CFGS;
+  const bool PerformHCBS = utils::hasSubBarriers(F, SAA) || ALWAYS_CREATE_SUBGROUP_SUB_CFGS;
 
   auto* SgNumSubgroups = mergeGVLoadsInEntry(F, cbs::SgNumSubgroupsGlobalName);
 

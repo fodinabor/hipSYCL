@@ -757,7 +757,7 @@ class acpp_config:
 
   @property
   def rv_plugin_path(self):
-    return "/usr/local/lib/RVPLUG.so"
+    return os.path.join(os.path.dirname(self.clang_path), "..", "lib", "RVPLUG.so")
 
   @property
   def sequential_link_line(self):
@@ -1556,6 +1556,7 @@ class rv_host:
         , "-fpass-plugin=" + config.acpp_plugin_path
         , "-fplugin=" + config.rv_plugin_path
         , "-fpass-plugin=" + config.rv_plugin_path
+        , "-DUSE_RV"
         , "-D__ACPP_USE_ACCELERATED_CPU__"
       ]
     flags += self._cxx_flags

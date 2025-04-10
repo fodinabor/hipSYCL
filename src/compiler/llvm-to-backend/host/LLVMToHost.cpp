@@ -147,7 +147,10 @@ bool LLVMToHostTranslator::translateToBackendFormat(llvm::Module &FlavoredModule
 
   const std::string ClangPath = HIPSYCL_CLANG_PATH;
   const std::string CpuFlag = HIPSYCL_HOST_CPU_FLAG;
-
+  const std::string LLVMInstallPrefix = ClangPath.substr(0, ClangPath.find_last_of("/\\")) + "/../";
+  const std::string RVplugin = "-fplugin=" + LLVMInstallPrefix + "lib/RVPLUG.so";
+  const std::string RVpassplugin = "-fpass-plugin=" + LLVMInstallPrefix + "lib/RVPLUG.so";
+  
   llvm::SmallVector<llvm::StringRef, 16> Invocation{
       ClangPath,
       "-O3",
@@ -158,9 +161,9 @@ bool LLVMToHostTranslator::translateToBackendFormat(llvm::Module &FlavoredModule
       "-Wno-pass-failed",
       "-fPIC",
 #if USE_RV
-    "-fno-unroll-loops",
-      "-fplugin=/usr/local/lib/RVPLUG.so",
-      "-fpass-plugin=/usr/local/lib/RVPLUG.so",
+      "-fno-unroll-loops",
+      RVplugin,
+      RVpassplugin,
 #endif
       "-o",
       OutputFile->TmpName,
