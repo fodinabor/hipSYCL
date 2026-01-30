@@ -34,6 +34,9 @@ jobs:
         brew install boost
         brew install ninja
         set -e
+    - name: print debug
+      run: |
+        clang++ -fuse-ld=lld -shared /dev/null -v
     - name: build
       run: |
         mkdir build && cd build
