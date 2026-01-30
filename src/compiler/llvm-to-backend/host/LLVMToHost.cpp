@@ -274,7 +274,7 @@ bool LLVMToHostTranslator::translateToBackendFormat(llvm::Module &FlavoredModule
                                                     "-o",
                                                     OutputFileName,
                                                     LlcOutputFileName,
-                                                    "libSystem.dylib",
+                                                    "-lSystem",
                                                     };
 #elif defined(_WIN32)
   std::string LldOutputFlag = "/out:"+OutputFileName.str();
