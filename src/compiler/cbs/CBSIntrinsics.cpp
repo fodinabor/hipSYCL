@@ -190,7 +190,12 @@ ReduceIntrinsic::vectorizeUniformValue(llvm::Value *Storage, llvm::IRBuilder<> &
     auto M = Intrinsic.getParent()->getParent()->getParent();
     if (!isInt) {
       auto *Pow =
+#if LLVM_VERSION_MAJOR >= 19
+          llvm::Intrinsic::getOrInsertDeclaration(M, llvm::Intrinsic::powi,
+                                                  {Type, Builder.getInt32Ty()});
+#else
           llvm::Intrinsic::getDeclaration(M, llvm::Intrinsic::powi, {Type, Builder.getInt32Ty()});
+#endif
       llvm::Value *result = Storage;
       llvm::SmallVector<llvm::Value *> Args{
           result, Builder.CreateIntCast(NumberOfLoopIterationsLeft, Builder.getInt32Ty(), false)};

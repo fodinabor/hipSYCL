@@ -1106,7 +1106,7 @@ void SubCFG::fixSingleSubCfgValues(
   auto *UniLoadIP = PreHeader_->getTerminator();
   llvm::IRBuilder Builder{LoadIP};
 
-  llvm::DenseMap<llvm::Instruction *, llvm::Instruction *> InstLoadMap;
+  llvm::DenseMap<llvm::Instruction *, llvm::SmallVector<llvm::Instruction *, 2>> InstLoadMap;
   llvm::Value *ContiguousIdx = HI.ContiguousIdx;
 
   for (auto *BB : NewBlocks_) {
@@ -1411,13 +1411,13 @@ bool fillUserHull(llvm::AllocaInst *Alloca, llvm::SmallVectorImpl<llvm::Instruct
 }
 
 // checks if all uses of an alloca are in just a single subcfg (doesn't have to be arrayified!)
-std::optional<SubCFG*> isAllocaSubCfgInternal(llvm::Value *Alloca, std::vector<SubCFG> &SubCfgs,
+std::optional<SubCFG*> isAllocaSubCfgInternal(llvm::AllocaInst *Alloca, std::vector<SubCFG> &SubCfgs,
                             const llvm::DominatorTree &DT) {
   llvm::SmallPtrSet<llvm::BasicBlock *, 16> UserBlocks;
   {
     llvm::SmallVector<llvm::Instruction *, 32> Users;
     if (fillUserHull(Alloca, Users))
-      return false; // alloca use captured by function.. unclear what the function may do with it.
+      return std::nullopt; // alloca use captured by function.. unclear what the function may do with it.
     utils::PtrSetWrapper<decltype(UserBlocks)> Wrapper{UserBlocks};
     std::transform(Users.begin(), Users.end(), std::inserter(Wrapper, UserBlocks.end()),
                    [](auto *I) { return I->getParent(); });
@@ -1592,7 +1592,7 @@ void arrayifyAllocas(llvm::BasicBlock *EntryBlock, llvm::DominatorTree &DT,
       Alloca->setMetadata(MDKind::Arrayified, MDAlloca);
 
       for (auto &SubCfg : SubCfgs) {
-        auto *GepIp = SubCfg.getLoadBB()->getFirstNonPHIOrDbgOrLifetime();
+        auto *GepIp = &*SubCfg.getLoadBB()->getFirstNonPHIOrDbgOrLifetime();
         auto *ContiguousIdx = SubCfg.getHI().ContiguousIdx;
 
         llvm::IRBuilder LoadBuilder{GepIp};
@@ -2062,7 +2062,7 @@ llvm::PreservedAnalyses SubCfgFormationPass::run(llvm::Function &F,
 
   assert(!llvm::verifyFunction(F, &llvm::outs()));
 
-  State state{.Dim = getRangeDim(F),
+  State state{.Dim = getRangeDim(F, IsSscp_),
               .SizeT = llvm::IntegerType::getInt64Ty(F.getContext())};
 
   if (IsSscp_) {
