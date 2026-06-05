@@ -317,7 +317,10 @@ std::vector<std::size_t> omp_hardware_context::get_property(device_uint_list_pro
 {
   switch(prop) {
   case device_uint_list_property::sub_group_sizes:
-    return std::vector<std::size_t>{compiler::SGSize};
+    // SGSize for vectorized sub-groups (kernels with sub-group barriers), and 1 for
+    // the scalar fallback used by barrier-free kernels. SGSize stays first so that it
+    // remains the preferred_work_group_size_multiple.
+    return std::vector<std::size_t>{compiler::SGSize, 1};
     break;
   }
   assert(false && "Invalid device property");

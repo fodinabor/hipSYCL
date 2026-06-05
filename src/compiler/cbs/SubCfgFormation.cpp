@@ -421,8 +421,13 @@ void createLoopsAround(llvm::Function &F, llvm::BasicBlock *AfterBB,
 
   Builder.SetInsertPoint(LoadBB, LoadBB->getFirstInsertionPt());
   if (HI.Level == HierarchicalLevel::CBS) {
-    VMap[mergeGVLoadsInEntry(F, cbs::SgIdGlobalName)] = Builder.CreateUDiv(Idx, Builder.getInt64(SGSize));
-    VMap[mergeGVLoadsInEntry(F, cbs::SgLocalIdGlobalName)] = Builder.CreateURem(IndVars.back(), llvm::ConstantInt::get(IndVars.back()->getType(), SGSize));
+    // Without sub-group barriers we do not form sub-group sub-CFGs, so there is no
+    // vectorized sub-group. Each work-item is then its own size-1 sub-group (matching
+    // the mainline host sub-group model): a barrier-free sub-group query resolves to
+    // size 1, local id 0, and a sub-group id equal to the work-item's local linear id.
+    VMap[mergeGVLoadsInEntry(F, cbs::SgIdGlobalName)] = Idx;
+    VMap[mergeGVLoadsInEntry(F, cbs::SgLocalIdGlobalName)] = Builder.getInt64(0);
+    VMap[mergeGVLoadsInEntry(F, cbs::SgSizeGlobalName)] = Builder.getInt64(1);
   } else if (HI.Level == HierarchicalLevel::H_CBS_SUBGROUP) {
     VMap[mergeGVLoadsInEntry(F, cbs::SgLocalIdGlobalName)] = Idx;
   } else {
