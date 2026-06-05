@@ -789,19 +789,6 @@ void SubCFG::arrayifyMultiSubCfgValues(
         HIPSYCL_DEBUG_ERROR << "VECTOR INFO: " << Shape << "\n";
 
         const auto isTrivialStepAway = [&F](llvm::Instruction &I,  llvm::StringRef S) {
-          auto getInsideRvUniform = [](llvm::Value* V)-> llvm::Value* {
-            if (V == nullptr) {
-              return nullptr;
-            }
-            if (auto *OpI = llvm::dyn_cast<llvm::Instruction>(V)) {
-              if (const auto CallInst = llvm::dyn_cast<llvm::CallInst>(OpI)) {
-                if (CallInst->getCalledFunction()->getName().contains("rv_is_uniform")) {
-                  return CallInst->getOperand(0);
-                }
-              }
-            }
-            return nullptr;
-          };
           auto *V = [&]() -> llvm::Value* {
             if (I.isBinaryOp()) {
               if (llvm::dyn_cast<llvm::Constant>(I.getOperand(0))) {
@@ -818,7 +805,7 @@ void SubCFG::arrayifyMultiSubCfgValues(
             return nullptr;
           }();
 
-          return isLoadFromGV(&I, F, S) || isLoadFromGV(getInsideRvUniform(&I), F, S) || isLoadFromGV(V, F, S) || isLoadFromGV(getInsideRvUniform(V), F, S);
+          return isLoadFromGV(&I, F, S) || isLoadFromGV(V, F, S);
         };
 
         const bool UsedByCbsIntrinsic = utils::anyOfUsers<llvm::Instruction>(&I, [](auto *UI) {

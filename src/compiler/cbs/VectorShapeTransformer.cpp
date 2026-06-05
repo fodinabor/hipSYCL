@@ -239,13 +239,6 @@ VectorShape VectorShapeTransformer::computeIdealShapeForInst(const Instruction &
       return (!srcShape.isDefined() || srcShape.isUniform()) ? srcShape : VectorShape::varying();
     }
 
-    //    // If the function is rv_align, use the alignment information
-    //    if (IsIntrinsic(call, RVIntrinsic::Align)) {
-    //      auto shape = getObservedShape(BB, *I.getOperand(0));
-    //      shape.setAlignment(cast<ConstantInt>(I.getOperand(1))->getZExtValue());
-    //      return shape;
-    //    }
-
     // collect required argument shapes
     // bail if any shape was undefined
     bool allArgsUniform = true;
