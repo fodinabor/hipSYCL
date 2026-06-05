@@ -16,13 +16,30 @@ function(libkernel_generate_bitcode_library)
   set(additional ${GENERATE_BITCODE_LIBRARY_ADDITIONAL_ARGS})
 
   set(target_output_file ${output})
+  if(ACPP_LLVM_COMPONENT)
+    set(target_depends clang)
+  endif()
+  if(WIN32)
+    set(platform_specific -DWIN32_LEAN_AND_MEAN -DNOMINMAX -D_USE_MATH_DEFINES)
+  elseif(APPLE)
+    # make overriding easier
+    if(CMAKE_SYSROOT)
+      set(platform_specific -isysroot ${CMAKE_SYSROOT})
+    else()
+      set(platform_specific -isysroot ${CMAKE_OSX_SYSROOT})
+    endif()
+  endif()
+
+  set(target_flag "")
+  if(triple)
+    set(target_flag -target ${triple})
+  endif()
+
   add_custom_command(
       OUTPUT ${target_output_file}
-      COMMAND ${CLANG_EXECUTABLE_PATH} -target ${triple} -fno-exceptions -fno-rtti -O3 -emit-llvm -std=c++17 -DHIPSYCL_SSCP_LIBKERNEL_LIBRARY
-                    -I ${HIPSYCL_SOURCE_DIR}/include ${additional} -o ${target_output_file} -c ${CMAKE_CURRENT_SOURCE_DIR}/${source}
-      DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${source}
-          ${CMAKE_SOURCE_DIR}/src
-          ${CMAKE_SOURCE_DIR}/include
+      COMMAND ${CLANG_EXECUTABLE_PATH} ${target_flag} -fno-exceptions -fno-rtti -O3 -emit-llvm -std=c++17 -DHIPSYCL_SSCP_LIBKERNEL_LIBRARY
+                    -I ${HIPSYCL_SOURCE_DIR}/include ${additional} ${platform_specific} -o ${target_output_file} -c ${CMAKE_CURRENT_SOURCE_DIR}/${source}
+      DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${source} ${target_depends}
       VERBATIM)
 
   install(FILES ${target_output_file} DESTINATION lib/hipSYCL/bitcode)
@@ -58,11 +75,15 @@ function(libkernel_generate_bitcode_target)
       ADDITIONAL_ARGS ${additional})
   endforeach()
 
+  if(ACPP_LLVM_COMPONENT)
+    set(target_depends llvm-link)
+  endif()
+
   set(linked_output ${CMAKE_CURRENT_BINARY_DIR}/libkernel-sscp-${target}-full.bc)
   add_custom_command(
     OUTPUT ${linked_output}
     COMMAND ${LLVM_TOOLS_BINARY_DIR}/llvm-link -o=${linked_output} ${output_files}
-    DEPENDS ${output_files}
+    DEPENDS ${output_files} ${target_depends}
   )
 
   install(FILES ${linked_output} DESTINATION lib/hipSYCL/bitcode)
@@ -78,3 +99,4 @@ add_subdirectory(spirv)
 add_subdirectory(ptx)
 add_subdirectory(amdgpu)
 add_subdirectory(host)
+add_subdirectory(metal)

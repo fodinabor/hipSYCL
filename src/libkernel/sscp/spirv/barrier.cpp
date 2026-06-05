@@ -17,6 +17,9 @@ __attribute__((convergent)) extern "C" void
 __spirv_ControlBarrier(__spv::ScopeFlag Execution, __spv::ScopeFlag Memory,
                        __acpp_uint32 Semantics);
 
+extern "C" void __spirv_MemoryBarrier(__spv::ScopeFlag Memory,
+                                      __acpp_uint32 Semantics);
+
 HIPSYCL_SSCP_CONVERGENT_BUILTIN void
 __acpp_sscp_work_group_barrier(__acpp_sscp_memory_scope fence_scope,
                                __acpp_sscp_memory_order mem_order) {
@@ -51,3 +54,20 @@ __acpp_sscp_sub_group_barrier(__acpp_sscp_memory_scope fence_scope,
 
   __spirv_ControlBarrier(__spv::ScopeFlag::Subgroup, mem_fence_scope, flags);
 }
+
+HIPSYCL_SSCP_BUILTIN
+void __acpp_sscp_memory_fence(__acpp_sscp_memory_scope scope,
+                              __acpp_sscp_memory_order order) {
+  __spv::ScopeFlag mem_fence_scope = get_spirv_scope(scope);
+  __acpp_uint32 flags = get_spirv_memory_semantics(order);
+
+  if(scope == __acpp_sscp_memory_scope::sub_group)
+    flags |= __spv::MemorySemanticsMaskFlag::SubgroupMemory;
+  else if(scope == __acpp_sscp_memory_scope::work_group)
+    flags |= __spv::MemorySemanticsMaskFlag::WorkgroupMemory;
+  else if(scope == __acpp_sscp_memory_scope::device)
+    flags |= __spv::MemorySemanticsMaskFlag::CrossWorkgroupMemory;
+
+  __spirv_MemoryBarrier(mem_fence_scope, flags);
+}
+

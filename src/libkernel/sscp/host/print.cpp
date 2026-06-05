@@ -13,5 +13,5 @@
 #include <cstdio>
 
 void __acpp_sscp_print(const char* msg) {
-  puts(msg);
+  fputs(msg, stdout);
 }

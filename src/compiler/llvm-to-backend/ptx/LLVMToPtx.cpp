@@ -44,48 +44,25 @@ namespace {
 
 
 
-class LibdevicePath {
-public:
-  static bool get(std::string& Out) {
-    static LibdevicePath P;
-
-    if(P.IsFound)
-      Out = P.Path;
-    return P.IsFound;
+std::string getDeviceLibPath() {
+  static std::string Path;
+  if(!Path.empty()) {
+    return Path;
   }
-private:
-  LibdevicePath() {
-    IsFound = findLibdevice(Path);
-
-    if(IsFound) {
-      HIPSYCL_DEBUG_INFO << "LLVMToPtx: Found libdevice: " << Path << "\n";
-    } else {
-      HIPSYCL_DEBUG_INFO << "LLVMToPtx: Could not find CUDA libdevice!\n";
-    }
+  
+  std::string LibdeviceName = "libdevice.10.bc";
+  std::string RedistPackagePath = 
+    common::filesystem::join_path(getRedistPackageBitcodePath("ptx"), LibdeviceName);
+  if (common::filesystem::exists(RedistPackagePath)) {
+    Path = RedistPackagePath;
+  } else {
+    Path = 
+      common::filesystem::join_path(ACPP_CUDA_DEVICE_LIBS_PATH, LibdeviceName);
   }
 
-  bool findLibdevice(std::string& Out) {
-    
-    std::string CUDAPath = HIPSYCL_CUDA_PATH;
-    std::vector<std::string> SubDir {"nvvm", "libdevice"};
-    std::string BitcodeDir = common::filesystem::join_path(CUDAPath, SubDir);
+  return Path;
+}
 
-    try {
-      auto Files = common::filesystem::list_regular_files(BitcodeDir);
-      for(const auto& F : Files) {
-        if (F.find("libdevice.") != std::string::npos && F.find(".bc") != std::string::npos) {
-          Out = F;
-          return true;
-        }
-      }
-    }catch(...) { /* false will be returned anyway at this point */ }
-
-    return false;
-  }
-
-  std::string Path;
-  bool IsFound;
-};
 
 void setNVVMReflectParameter(llvm::Module& M, llvm::StringRef Name, int Value) {
   llvm::SmallVector<llvm::Metadata*, 4> Metadata;
@@ -110,48 +87,6 @@ void setPrecSqrt(llvm::Module& M, int Mode) {
   setNVVMReflectParameter(M, "prec-sqrt", Mode);
 }
 
-
-using IntrinsicMapping = std::array<const char*, 2>;
-// These intrinsics seem to not be handled correctly by NVPTX backend,
-// so replace them with our own builtins.
-static constexpr std::array IntrinsicReplacementMap = {
-  IntrinsicMapping{"llvm.pow.f32", "__acpp_sscp_pow_f32"},
-  IntrinsicMapping{"llvm.pow.f64", "__acpp_sscp_pow_f64"},
-  IntrinsicMapping{"llvm.exp.f32", "__acpp_sscp_exp_f32"},
-  IntrinsicMapping{"llvm.exp.f64", "__acpp_sscp_exp_f64"},
-  IntrinsicMapping{"llvm.exp2.f32", "__acpp_sscp_exp2_f32"},
-  IntrinsicMapping{"llvm.exp2.f64", "__acpp_sscp_exp2_f64"},
-  IntrinsicMapping{"llvm.exp10.f32", "__acpp_sscp_exp10_f32"},
-  IntrinsicMapping{"llvm.exp10.f64", "__acpp_sscp_exp10_f64"},
-  IntrinsicMapping{"llvm.cos.f32", "__acpp_sscp_cos_f32"},
-  IntrinsicMapping{"llvm.cos.f64", "__acpp_sscp_cos_f64"},
-  IntrinsicMapping{"llvm.sin.f32", "__acpp_sscp_sin_f32"},
-  IntrinsicMapping{"llvm.sin.f64", "__acpp_sscp_sin_f64"},
-  // tan seems fine
-  IntrinsicMapping{"llvm.log.f32", "__acpp_sscp_log_f32"},
-  IntrinsicMapping{"llvm.log.f64", "__acpp_sscp_log_f64"},
-  IntrinsicMapping{"llvm.log2.f32", "__acpp_sscp_log2_f32"},
-  IntrinsicMapping{"llvm.log2.f64", "__acpp_sscp_log2_f64"},
-  IntrinsicMapping{"llvm.log10.f32", "__acpp_sscp_log10_f32"},
-  IntrinsicMapping{"llvm.log10.f64", "__acpp_sscp_log10_f64"},
-  // asin seems fine (presumably acos and atan as well)
-  // sqrt seems fine
-};
-
-void replaceBrokenLLVMIntrinsics(llvm::Module& M) {
-  for(auto& RM : IntrinsicReplacementMap) {
-    if(auto* F = M.getFunction(RM[0])) {
-      llvm::Function* Replacement = M.getFunction(RM[1]);
-
-      if(!Replacement) {
-        Replacement = llvm::Function::Create(F->getFunctionType(),
-                                             llvm::GlobalValue::ExternalLinkage, RM[1], M);
-        F->replaceAllUsesWith(Replacement);
-      }
-    }
-  }
-}
-
 }
 
 LLVMToPtxTranslator::LLVMToPtxTranslator(const std::vector<std::string> &KN)
@@ -160,11 +95,22 @@ LLVMToPtxTranslator::LLVMToPtxTranslator(const std::vector<std::string> &KN)
 
 bool LLVMToPtxTranslator::toBackendFlavor(llvm::Module &M, PassHandler& PH) {
   std::string Triple = "nvptx64-nvidia-cuda";
+
+#if LLVM_VERSION_MAJOR > 20
+  std::string DataLayout =
+      "e-p6:32:32-i64:64-i128:128-v16:16-v32:32-n16:32:64";
+#else
   std::string DataLayout =
       "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-i128:128:128-f32:32:32-"
       "f64:64:64-v16:16:16-v32:32:32-v64:64:64-v128:128:128-n16:32:64";
+#endif
 
+#if LLVM_VERSION_MAJOR > 20
+  M.setTargetTriple(llvm::Triple(Triple));
+#else
   M.setTargetTriple(Triple);
+#endif
+
   M.setDataLayout(DataLayout);
 
   // Initialize libdevice parameters. These values are < 0 in case no explicit
@@ -198,17 +144,13 @@ bool LLVMToPtxTranslator::toBackendFlavor(llvm::Module &M, PassHandler& PH) {
     }
   }
 
-  replaceBrokenLLVMIntrinsics(M);
+  replaceLLVMIntrinsicsWithAcppBuiltins(M);
 
-  std::string BuiltinBitcodeFile = 
-    common::filesystem::join_path(common::filesystem::get_install_directory(),
-      {"lib", "hipSYCL", "bitcode", "libkernel-sscp-ptx-full.bc"});
-  
-  std::string LibdeviceFile;
-  if(!LibdevicePath::get(LibdeviceFile)) {
-    this->registerError("LLVMToPtx: Could not find CUDA libdevice bitcode library");
-    return false;
-  }
+  std::string BuiltinBitcodeFile =
+      common::filesystem::join_path(getBitcodePath(), "libkernel-sscp-ptx-full.bc");
+
+  std::string LibdeviceFile = getDeviceLibPath();
+  HIPSYCL_DEBUG_INFO << "LLVMToPtx: Using libdevice at " << LibdeviceFile << "\n";
 
   AddressSpaceInferencePass ASIPass {ASMap};
   ASIPass.run(M, *PH.ModuleAnalysisManager);
@@ -228,49 +170,76 @@ bool LLVMToPtxTranslator::toBackendFlavor(llvm::Module &M, PassHandler& PH) {
 
 bool LLVMToPtxTranslator::translateToBackendFormat(llvm::Module &FlavoredModule, std::string &out) {
 
-  auto InputFile = llvm::sys::fs::TempFile::create("acpp-sscp-ptx-%%%%%%.bc");
-  auto OutputFile = llvm::sys::fs::TempFile::create("acpp-sscp-ptx-%%%%%%.s");
+  llvm::SmallVector<char> InputFile;
+  int InputFD;
+  // don't use fs::TempFile, as we can't unlock the file for the llc invocation later... (Windows)
+  if(auto E = llvm::sys::fs::createTemporaryFile("acpp-sscp-ptx", "bc", InputFD, InputFile, llvm::sys::fs::OF_None)){
+    this->registerError("LLVMToPtx: Could not create temp input file" + E.message());
+    return false;
+  }
+  llvm::StringRef InputFileName = InputFile.data();
 
-  if (auto Err = InputFile.takeError()) {
-    this->registerError("LLVMToPtx: Could not create temp file: "+InputFile->TmpName);
+  AtScopeExit RemoveInputFile([&](){auto Err = llvm::sys::fs::remove(InputFileName);});
+
+  llvm::SmallVector<char> OptOutputFile;
+  if(auto E = llvm::sys::fs::createTemporaryFile("acpp-sscp-ptx", "bc", OptOutputFile, llvm::sys::fs::OF_None)){
+    this->registerError("LLVMToPtx: Could not create temp file" + E.message());
+    return false;
+  }
+  llvm::StringRef OptOutputFileName = OptOutputFile.data();
+  AtScopeExit RemoveOptOutputFile([&](){auto Err = llvm::sys::fs::remove(OptOutputFileName);});
+
+  llvm::SmallVector<char> OutputFile;
+  if(auto E = llvm::sys::fs::createTemporaryFile("acpp-sscp-ptx", "s", OutputFile, llvm::sys::fs::OF_None)){
+    this->registerError("LLVMToPtx: Could not create temp input file" + E.message());
+    return false;
+  }
+  llvm::StringRef OutputFileName = OutputFile.data();
+  AtScopeExit RemoveOutputFile([&](){auto Err = llvm::sys::fs::remove(OutputFileName);});
+
+  {
+    llvm::raw_fd_ostream InputStream{InputFD, true};
+
+    llvm::WriteBitcodeToFile(FlavoredModule, InputStream);
+    
+    if(InputStream.error()) {HIPSYCL_DEBUG_ERROR << "Error while writing" << InputStream.error().message() << '\n'; }
+    InputStream.flush();
+    if(InputStream.error()) {HIPSYCL_DEBUG_ERROR << "Error while flushing" << InputStream.error().message() << '\n'; }
+  }
+
+  std::string PtxTargetArg = "--mcpu=sm_" + std::to_string(PtxTarget);
+
+  const std::string OptPath = getOptPath();
+  int OptR = executeAndWait(
+      OptPath, {OptPath, PtxTargetArg, "-O3", InputFileName, "-o", OptOutputFileName});
+
+  if(OptR != 0) {
+    this->registerError("LLVMToPtx: opt invocation failed with exit code " +
+                        std::to_string(OptR));
     return false;
   }
 
-  if (auto Err = OutputFile.takeError()) {
-    this->registerError("LLVMToPtx: Could not create temp file: " + OutputFile->TmpName);
-    return false;
-  }
+  const std::string LLCPath = getLLCPath();
 
-  AtScopeExit DestroyInputFile([&]() { consumeError(std::move(InputFile->discard())); });
-  AtScopeExit DestroyOutputFile([&]() { consumeError(std::move(OutputFile->discard())); });
-
-  std::error_code EC;
-  llvm::raw_fd_ostream InputStream{InputFile->FD, false};
+  std::string PtxVersionArg = "--mattr=+ptx" + std::to_string(PtxVersion);
   
-  llvm::WriteBitcodeToFile(FlavoredModule, InputStream);
-  InputStream.flush();
-
-  std::string ClangPath = HIPSYCL_CLANG_PATH;
-
-  std::string PtxVersionArg = "+ptx" + std::to_string(PtxVersion);
-  std::string PtxTargetArg = "sm_" + std::to_string(PtxTarget);
-  llvm::SmallVector<llvm::StringRef, 16> Invocation{ClangPath,
-                                                    "-cc1",
-                                                    "-triple",
-                                                    "nvptx64-nvidia-cuda",
-                                                    "-target-feature",
+  llvm::SmallVector<llvm::StringRef, 16> Invocation{LLCPath,
+                                                    "--mtriple=nvptx64-nvidia-cuda",
+                                                    "--march=nvptx64",
+                                                    "--frame-pointer=none",
                                                     PtxVersionArg,
-                                                    "-target-cpu",
                                                     PtxTargetArg,
                                                     "-O3",
-                                                    "-S",
-                                                    "-x",
-                                                    "ir",
                                                     "-o",
-                                                    OutputFile->TmpName,
-                                                    InputFile->TmpName};
-  if(IsFastMath)
-    Invocation.push_back("-ffast-math");
+                                                    OutputFileName,
+                                                    OptOutputFileName};
+  if(IsFastMath) {
+    Invocation.push_back("--enable-unsafe-fp-math");
+    Invocation.push_back("--enable-no-infs-fp-math");
+    Invocation.push_back("--enable-no-nans-fp-math");
+    Invocation.push_back("--enable-no-signed-zeros-fp-math");
+    Invocation.push_back("--enable-no-trapping-fp-math");
+  }
 
   std::string ArgString;
   for(const auto& S : Invocation) {
@@ -278,21 +247,19 @@ bool LLVMToPtxTranslator::translateToBackendFormat(llvm::Module &FlavoredModule,
     ArgString += " ";
   }
   HIPSYCL_DEBUG_INFO << "LLVMToPtx: Invoking " << ArgString << "\n";
-
-  int R = llvm::sys::ExecuteAndWait(
-      ClangPath, Invocation);
+  
+  int R = executeAndWait(LLCPath, Invocation);
   
   if(R != 0) {
-    this->registerError("LLVMToPtx: clang invocation failed with exit code " +
+    this->registerError("LLVMToPtx: llc invocation failed with exit code " +
                         std::to_string(R));
     return false;
   }
   
-  auto ReadResult =
-      llvm::MemoryBuffer::getFile(OutputFile->TmpName, -1);
+  auto ReadResult = llvm::MemoryBuffer::getFile(OutputFileName);
   
   if(auto Err = ReadResult.getError()) {
-    this->registerError("LLVMToPtx: Could not read result file"+Err.message());
+    this->registerError("LLVMToPtx: Could not read result file" + Err.message());
     return false;
   }
   

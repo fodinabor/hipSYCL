@@ -15,7 +15,6 @@
 
 #include "hipSYCL/common/debug.hpp"
 
-#include <hipSYCL/RV.h>
 #include <llvm/Analysis/TargetTransformInfo.h>
 #include <llvm/IR/Dominators.h>
 

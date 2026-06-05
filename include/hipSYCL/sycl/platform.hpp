@@ -19,6 +19,7 @@
 #include "hipSYCL/runtime/device_id.hpp"
 
 #include "types.hpp"
+#include "backend.hpp"
 #include "device_selector.hpp"
 #include "info/info.hpp"
 #include "version.hpp"
@@ -38,7 +39,7 @@ public:
   : _platform{platform} {}
 
   platform(rt::backend_id backend, std::size_t platform_index)
-      : _platform{backend, platform_index} {}
+      : _platform{backend, static_cast<int>(platform_index)} {}
 
   template<class DeviceSelector>
   explicit platform(const DeviceSelector &deviceSelector) {
@@ -55,6 +56,9 @@ public:
         rt::platform_id{dev.get_backend(), static_cast<int>(platform_index)};
   }
 
+  backend get_backend() const noexcept {
+    return _platform.get_backend();
+  }
 
   std::vector<device>
   get_devices(info::device_type type = info::device_type::all) const {
@@ -92,7 +96,7 @@ public:
 
 
   /// \todo Think of a better solution
-  bool has_extension(const string_class &extension) const {
+  bool has_extension(const std::string &extension) const {
     return false;
   }
 
@@ -182,12 +186,12 @@ HIPSYCL_SPECIALIZE_GET_INFO(platform, vendor)
 
 HIPSYCL_SPECIALIZE_GET_INFO(platform, extensions)
 {
-  return vector_class<string_class>{};
+  return std::vector<std::string>{};
 }
 
 inline platform device::get_platform() const  {
   return platform{_device_id.get_backend(),
-                  static_cast<int>(get_rt_device()->get_platform_index())};
+                  static_cast<size_t>(get_rt_device()->get_platform_index())};
 }
 
 }// namespace sycl

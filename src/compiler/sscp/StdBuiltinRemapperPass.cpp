@@ -56,6 +56,11 @@ static constexpr std::array math_builtins = {
     "sqrt",       "sqrtf",       "sqrtl",       "tan",       "tanf",       "tanl",
     "tanh",       "tanhf",       "tanhl",       "tgamma",    "tgammaf",    "tgammal"};
 
+// these are remapped for f32 and f64
+static constexpr std::array remapped_llvm_math_builtins = {
+  "sin", "cos", "sqrt"
+};
+
 using builtin_mapping = std::array<const char*, 2>;
 // We may want to complete this with soft-float functions defined here:
 // https://gcc.gnu.org/onlinedocs/gccint/Soft-float-library-routines.html
@@ -125,8 +130,13 @@ llvm::PreservedAnalyses StdBuiltinRemapperPass::run(llvm::Module &M,
       Replacements[B] = "__acpp_sscp_" + BaseName + "_" + Suffix;
     }
   }
-   for(const auto& EM : explicitly_mapped_builtins) {
+  for(const auto& EM : explicitly_mapped_builtins) {
     Replacements[EM[0]] = EM[1];
+  }
+  for(const auto& B : remapped_llvm_math_builtins) {
+    std::string builtin_name = std::string{B};
+    Replacements["llvm." + builtin_name + ".f32"] = "__acpp_sscp_" + builtin_name + "_f32";
+    Replacements["llvm." + builtin_name + ".f64"] = "__acpp_sscp_" + builtin_name + "_f64";
   }
 
   for(const auto& B: Replacements) {

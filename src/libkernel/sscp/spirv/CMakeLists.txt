@@ -4,6 +4,7 @@ if(WITH_LLVM_TO_SPIRV)
       TARGETNAME spirv 
       TRIPLE spir64-unknown-unknown
       SOURCES 
+      assert.cpp
       atomic.cpp
       barrier.cpp
       core.cpp

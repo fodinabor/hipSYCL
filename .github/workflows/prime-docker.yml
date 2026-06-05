@@ -1,0 +1,49 @@
+name: Prime docker container
+
+on:
+  workflow_dispatch:
+    inputs:
+      clang:
+        description: 'LLVM Version to install'
+        required: true
+        default: "20"
+      os:
+        description: 'Base Operating System'
+        required: true
+        default: "ubuntu-22.04"
+      cuda_major_version:
+        description: 'CUDA Major Version (default 11)'
+      cuda_minor_version:
+        description: 'CUDA Minor Version'
+        default: "0"
+      cuda_patch_version:
+        description: 'CUDA Patch Version'
+        default: "2"
+      rocm:
+        description: 'ROCm Version (default 5.4.3)'
+      force:
+        description: 'Force build the image'
+        default: "false"
+
+jobs:
+  prep-container:
+    name: Prepare CI container clang ${{ inputs.clang }}, ${{ inputs.os }}, CUDA ${{inputs.cuda_major_version}}.${{inputs.cuda_minor_version}}.${{inputs.cuda_patch_version}}, ROCm ${{inputs.rocm}}
+    runs-on: ubuntu-22.04
+    permissions:
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+          fetch-depth: 20
+      - uses: ./.github/workflows/create-ci-docker
+        id: docker
+        with:
+          LLVM_VERSION: ${{ inputs.clang }}
+          ROCM_VERSION: ${{ inputs.rocm }}
+          CUDA_MAJOR_VERSION: ${{ inputs.cuda_major_version }}
+          CUDA_MINOR_VERSION: ${{ inputs.cuda_minor_version }}
+          CUDA_PATCH_VERSION: ${{ inputs.cuda_patch_version }}
+          BASE_TAG: ${{ inputs.os }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORCE_BUILD: ${{ inputs.force != 'false' }}

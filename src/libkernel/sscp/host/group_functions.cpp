@@ -6,13 +6,12 @@
 #include "hipSYCL/sycl/libkernel/sscp/builtins/subgroup.hpp"
 #include "hipSYCL/sycl/libkernel/sub_group.hpp"
 
-#include "hipSYCL/RV.h"
+#include "hipSYCL/cbs_config.hpp"
 #include "hipSYCL/sycl/libkernel/host/cbs_intrinsics.h"
 #include <cassert>
 #include <cstdint>
 #include <type_traits>
 
-#include "hipSYCL/sycl/libkernel/host/rv_shuffle.h"
 
 // TODO use the correct functions
 extern "C" [[clang::convergent]] void __acpp_cbs_sub_barrier();
@@ -69,9 +68,6 @@ template <typename T> T work_broadcast(const int sender, T x) {
 }
 
 template <typename T> T sub_broadcast(const int sender, T x) {
-#if USE_RV
-  return hipsycl::sycl::detail::extract_impl<T>(x, sender);
-#else
 #if USE_CBS_SHUFFLE
   auto e = static_cast<uint64_t>(sender);
   __acpp_cbs_sub_barrier();
@@ -87,13 +83,9 @@ template <typename T> T sub_broadcast(const int sender, T x) {
   __acpp_cbs_sub_barrier();
   return x;
 #endif
-#endif
 }
 
 template <typename T> T sub_shift_left(T x, __acpp_uint32 delta) {
-#if USE_RV
-  return hipsycl::sycl::detail::shuffle_down_impl<T>(x, static_cast<int>(delta));
-#else
 #if USE_CBS_SHUFFLE
   __acpp_cbs_sub_barrier();
   const auto pos =
@@ -117,7 +109,6 @@ template <typename T> T sub_shift_left(T x, __acpp_uint32 delta) {
   x = scratch[target_lid];
   __acpp_cbs_sub_barrier();
   return x;
-#endif
 #endif
 }
 
@@ -191,19 +182,6 @@ template <typename T, std::enable_if_t<! std::is_integral_v<T>, bool> = true> co
 
 template <typename T> T sub_reduce(__acpp_sscp_algorithm_op op, T x) {
   ReduceOp operation = reduce_op_map(op);
-#if USE_RV
-  if (operation != ReduceOp::NOT_SUPPORTED && USE_REDUCE_INTRINSIC) {
-    return rv_reduce(x, static_cast<int>(operation));
-  } else  {
-    auto local_x = x;
-    #pragma unroll
-    for (auto i = __acpp_sscp_get_subgroup_size() / 2; i > 0; i /= 2) {
-      auto other_x = sub_shift_left(local_x, i);
-      local_x = binary_op(op, local_x, other_x);
-    }
-    return sub_broadcast(0, local_x);
-  }
-#else
   if (operation != ReduceOp::NOT_SUPPORTED && USE_REDUCE_INTRINSIC) {
     __acpp_cbs_sub_barrier();
     const T t = __cbs_reduce(x, static_cast<int>(operation));
@@ -222,7 +200,6 @@ template <typename T> T sub_reduce(__acpp_sscp_algorithm_op op, T x) {
     __acpp_cbs_sub_barrier();
     return result;
   }
-#endif
 }
 
 template <typename T> T work_reduce(__acpp_sscp_algorithm_op op, T x) {
@@ -281,9 +258,6 @@ template <typename T> T work_shift_left(T x, __acpp_uint32 delta) {
 }
 
 template <typename T> T sub_shift_right(T x, __acpp_uint32 delta) {
-#if USE_RV
-  return hipsycl::sycl::detail::shuffle_up_impl(x, delta);
-#else
 #if USE_CBS_SHUFFLE
   __acpp_cbs_sub_barrier();
   const auto pos =
@@ -311,7 +285,6 @@ template <typename T> T sub_shift_right(T x, __acpp_uint32 delta) {
   __acpp_cbs_sub_barrier();
   return x;
 #endif
-#endif
 }
 
 template <typename T> T work_shift_right(T x, __acpp_uint32 delta) {
@@ -335,9 +308,6 @@ template <typename T> T work_shift_right(T x, __acpp_uint32 delta) {
 }
 
 template <typename T> T sub_select(T x, __acpp_uint32 delta) {
-#if USE_RV
-  return hipsycl::sycl::detail::shuffle_impl(x, delta);
-#else
 #if USE_CBS_SHUFFLE
   __acpp_cbs_sub_barrier();
   auto res = __cbs_shuffle(x, delta);
@@ -351,7 +321,6 @@ template <typename T> T sub_select(T x, __acpp_uint32 delta) {
   x = scratch[delta];
   __acpp_cbs_sub_barrier();
   return x;
-#endif
 #endif
 }
 
@@ -376,15 +345,11 @@ bool __acpp_sscp_work_group_any(bool pred) {
 
 HIPSYCL_SSCP_CONVERGENT_BUILTIN
 bool __acpp_sscp_sub_group_any(bool pred) {
-#if USE_RV
-  return rv_any(pred);
-#else
   auto v = static_cast<uint8_t>(pred);
   __acpp_cbs_sub_barrier();
   const auto t = __cbs_reduce(v, static_cast<int>(ReduceOp::MAX)) > 0;
   __acpp_cbs_sub_barrier();
   return t;
-#endif
 }
 
 HIPSYCL_SSCP_CONVERGENT_BUILTIN
@@ -394,11 +359,7 @@ bool __acpp_sscp_work_group_all(bool pred) {
 
 HIPSYCL_SSCP_CONVERGENT_BUILTIN
 bool __acpp_sscp_sub_group_all(bool pred) {
-#if USE_RV
-  return rv_all(pred);
-#else
   return sub_reduce(__acpp_sscp_algorithm_op::min, static_cast<uint8_t>(pred)) > 0;
-#endif
 }
 
 HIPSYCL_SSCP_CONVERGENT_BUILTIN
@@ -411,16 +372,6 @@ bool __acpp_sscp_sub_group_none(bool pred) { return __acpp_sscp_sub_group_all(!p
 template <typename T> T sub_inclusive_scan(__acpp_sscp_algorithm_op op, T x) {
   const size_t lid = __acpp_sscp_get_subgroup_local_id();
   const size_t lrange = __acpp_sscp_get_subgroup_size();
-#if USE_RV
-  auto local_x = x;
-#pragma unroll
-  for (size_t i = 1; i < lrange; i *= 2) {
-    auto other_x = sub_shift_right(local_x, i);
-    if (i <= lid)
-      local_x = binary_op(op, local_x, other_x);
-  }
-  return local_x;
-#else
   T *scratch = static_cast<T *>(__acpp_sub_group_shared_memory);
 
   scratch[lid] = x;
@@ -436,7 +387,6 @@ template <typename T> T sub_inclusive_scan(__acpp_sscp_algorithm_op op, T x) {
   __acpp_cbs_sub_barrier();
 
   return tmp;
-#endif
 }
 
 template <typename T> T work_inclusive_scan(__acpp_sscp_algorithm_op op, T x) {

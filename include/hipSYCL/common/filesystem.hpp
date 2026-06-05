@@ -11,6 +11,7 @@
 #ifndef HIPSYCL_COMMON_FILESYSTEM_HPP
 #define HIPSYCL_COMMON_FILESYSTEM_HPP
 
+#include <optional>
 #include <string>
 #include <vector>
 #include <memory>
@@ -24,34 +25,40 @@ namespace common {
 
 namespace filesystem {
 
-std::string get_install_directory();
+ACPP_COMMON_EXPORT std::string get_install_directory();
+ACPP_COMMON_EXPORT std::string get_lib_directory();
+// returns path to running program.
+// if filename/directory are not null, stores the filename and 
+// containing directory in them.
+ACPP_COMMON_EXPORT std::string
+get_this_executable_path(std::string* filename = nullptr,
+                         std::string* directory = nullptr);
 
-std::string join_path(const std::string& base, const std::string& extra);
+ACPP_COMMON_EXPORT std::string join_path(const std::string& base, const std::string& extra);
 
-bool exists(const std::string& path);
+ACPP_COMMON_EXPORT bool exists(const std::string& path);
 
-std::string absolute(const std::string& path);
+ACPP_COMMON_EXPORT std::string absolute(const std::string& path);
 
-std::string
+ACPP_COMMON_EXPORT std::string
 join_path(const std::string &base,
           const std::vector<std::string> &additional_components);
 
-std::vector<std::string> list_regular_files(const std::string &directory);
-std::vector<std::string> list_regular_files(const std::string &directory,
-                                            const std::string &extension);
-
+ACPP_COMMON_EXPORT std::vector<std::string> list_regular_files(const std::string &directory,
+                                            std::error_code &EC);
+ACPP_COMMON_EXPORT std::vector<std::string> list_regular_files(const std::string &directory,
+                                            const std::string &extension,
+                                            std::error_code &EC);
+ACPP_COMMON_EXPORT std::string filename(const std::string& path);
 /// Writes data atomically to filename
-bool atomic_write(const std::string& filename, const std::string& data);
+ACPP_COMMON_EXPORT bool atomic_write(const std::string& filename, const std::string& data);
 
 /// Removes a file, returns true if successful.
-bool remove(const std::string &filename);
+ACPP_COMMON_EXPORT bool remove(const std::string &filename);
 
-class persistent_storage {
+class ACPP_COMMON_EXPORT persistent_storage {
 public:
-  static persistent_storage& get() {
-    static persistent_storage t;
-    return t;
-  }
+  static persistent_storage& get();
 
   const std::string& get_base_dir() const {
     return _base_dir;

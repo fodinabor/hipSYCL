@@ -88,6 +88,7 @@ extern "C" size_t __acpp_cbs_local_id_z;
 extern "C" size_t __acpp_cbs_local_id_subgroup;
 
 template <int Dim, class Function>
+[[clang::annotate("acpp_cbs_kernel_dimension", Dim)]]
 HIPSYCL_LOOP_SPLIT_ND_KERNEL __attribute__((noinline)) inline void
 iterate_nd_range_omp(Function f, const sycl::id<Dim> &&group_id, const sycl::range<Dim> num_groups,
                      HIPSYCL_LOOP_SPLIT_ND_KERNEL_LOCAL_SIZE_ARG const sycl::range<Dim> local_size,
@@ -190,8 +191,9 @@ inline void parallel_for_ndrange_kernel(Function f, const sycl::range<Dim> num_g
                            num_local_mem_bytes, &group_shared_memory_ptr,
                            &sub_group_shared_memory_ptr, barrier_impl);
     });
-#elif defined(HIPSYCL_HAS_FIBERS)
-    host::static_range_decomposition<Dim> group_decomposition{num_groups, get_num_threads()};
+#elif defined(ACPP_USE_FIBERS)
+    host::static_range_decomposition<Dim> group_decomposition{
+        num_groups, get_num_threads()};
 
     host::collective_execution_engine<Dim> engine{num_groups, local_size, offset,
                                                   group_decomposition, get_my_thread_id()};
@@ -299,27 +301,17 @@ public:
             std::size_t dynamic_local_memory, Kernel k) {
 
     this->_type = type;
-#if !defined(HIPSYCL_HAS_FIBERS) && !defined(__ACPP_USE_ACCELERATED_CPU__)
+#if !defined(ACPP_USE_FIBERS) && !defined(__ACPP_USE_ACCELERATED_CPU__)
     if (type == rt::kernel_type::ndrange_parallel_for) {
       this->_invoker = [](rt::dag_node *node){};
 
-      throw sycl::exception{
-          sycl::make_error_code(sycl::errc::feature_not_supported),
-          "nd_range kernels on CPU are only supported if either compiler support (requires using "
-          "Clang)\n"
-          "or fibers are enabled, as otherwise they cannot be efficiently implemented. It is "
-          "recommended:\n"
-          " * to verify that you really need the features of nd_range parallel for.\n"
-          "   If you do not need local memory, use basic parallel for instead.\n"
-          " * users targeting SYCL 1.2.1 may use hierarchical parallel for, which\n"
-          "   can express the same algorithms, but may have functionality caveats in hipSYCL\n"
-          "   and/or other SYCL implementations.\n"
-          " * if you use hipSYCL exclusively, you are encouraged to use scoped parallelism:\n"
-          "   https://github.com/illuhad/hipSYCL/blob/develop/doc/scoped-parallelism.md\n"
-          " * if you can use Clang, enable the compiler support\n"
-          "   CMake: -DHIPSYCL_USE_ACCELERATED_CPU=ON, syclcc: --hipsycl-use-accelerated-cpu\n"
-          " * if you absolutely need nd_range parallel for and cannot use Clang, enable fiber "
-          "support in hipSYCL."};
+      throw sycl::exception{sycl::make_error_code(sycl::errc::feature_not_supported),
+        "nd_range kernels on CPU are only supported if either compiler support (requires using Clang)\n"
+        "or fibers are enabled, as otherwise they cannot be efficiently implemented. It is recommended:\n"
+        " * if you can use Clang, enable the accelerated CPU compiler support\n"
+        "   CMake: -DACPP_USE_ACCELERATED_CPU=ON, acpp: --acpp-use-accelerated-cpu\n"
+        " * if you absolutely need nd_range parallel_for and cannot use Clang, don't build AdaptiveCpp with fiber support."
+      };
     }
 #endif
 

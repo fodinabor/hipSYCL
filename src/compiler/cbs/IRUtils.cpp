@@ -47,7 +47,7 @@ void replaceUsesOfGVWith(llvm::Function &F, llvm::StringRef GlobalVarName, llvm:
     if (auto I = llvm::dyn_cast<llvm::LoadInst>(U); I && I->getFunction() == &F) {
       HIPSYCL_DEBUG_INFO << LogPrefix << "RUOGVW: " << *I << " with " << *To << "\n";
       I->replaceAllUsesWith(To);
-      ToErase.emplace_back(I);
+      ToErase.push_back(I);
     }
   }
   for (auto I : ToErase)
@@ -154,7 +154,7 @@ llvm::CallInst *createBarrier(llvm::Instruction *InsertBefore, SplitterAnnotatio
   F->setLinkage(llvm::GlobalValue::LinkOnceAnyLinkage);
   SAA.addSplitter(F);
 
-  return llvm::CallInst::Create(F, "", InsertBefore);
+  return llvm::CallInst::Create(F, "", llvmutils::makeInsertionPoint(InsertBefore));
 }
 
 bool isCBSIntrinsic(llvm::Function *F) {
@@ -648,13 +648,18 @@ getLocalSizeArgumentFromAnnotation(llvm::Function &F) {
 
 // bring along the llvm.dbg.value intrinsics when cloning values
 void copyDgbValues(llvm::Value *From, llvm::Value *To, llvm::Instruction *InsertBefore) {
+#if LLVM_VERSION_MAJOR < 22
   llvm::SmallVector<llvm::DbgValueInst *, 1> DbgValues;
   llvm::findDbgValues(DbgValues, From);
+#else
+  llvm::SmallVector<llvm::DbgVariableRecord *, 1> DbgValues;
+  llvm::findDbgValues(From, DbgValues);
+#endif
   if (!DbgValues.empty()) {
     auto *DbgValue = DbgValues.back();
     llvm::DIBuilder DbgBuilder{*InsertBefore->getParent()->getParent()->getParent()};
     DbgBuilder.insertDbgValueIntrinsic(To, DbgValue->getVariable(), DbgValue->getExpression(),
-                                       DbgValue->getDebugLoc(), InsertBefore);
+                                       DbgValue->getDebugLoc(), llvmutils::makeInsertionPoint(InsertBefore));
   }
 }
 

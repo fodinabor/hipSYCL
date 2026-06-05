@@ -125,15 +125,16 @@ llvm::PreservedAnalyses AddressSpaceInferencePass::run(llvm::Module &M,
             HIPSYCL_DEBUG_INFO << "AddressSpaceInferencePass: Found alloca in address space "
                                << AI->getAddressSpace() << " when it should be in AS "
                                << AllocaAddrSpace << ", fixing.\n";
-            auto *NewAI = new llvm::AllocaInst{AI->getAllocatedType(), AllocaAddrSpace, "", AI};
-            auto* ASCastInst = new llvm::AddrSpaceCastInst{NewAI, AI->getType(), "", AI};
+            auto *NewAI = new llvm::AllocaInst{AI->getAllocatedType(), AllocaAddrSpace, "", llvmutils::makeInsertionPoint(AI)};
+            auto* ASCastInst = new llvm::AddrSpaceCastInst{NewAI, AI->getType(), "", llvmutils::makeInsertionPoint(AI)};
 
             // llvm.lifetime intrinsics don't like addrspacecasts,
             // so we cannot just make them use ASCastInst instead of AI now.
             forEachUseOfPointerValue(AI, [&](llvm::Value* U){
               if(auto* CB = llvm::dyn_cast<llvm::CallBase>(U)) {
-                llvm::StringRef CalleeName = CB->getCalledFunction()->getName();
-                if(llvmutils::starts_with(CalleeName,"llvm.lifetime")) {
+                if (CB->getCalledFunction() &&
+                    llvmutils::starts_with(CB->getCalledFunction()->getName(), "llvm.lifetime")) {
+                  llvm::StringRef CalleeName = CB->getCalledFunction()->getName();
                   InstsToRemove.push_back(CB);
 
                   llvm::Intrinsic::ID Id = llvmutils::starts_with(CalleeName, "llvm.lifetime.start")
@@ -141,10 +142,15 @@ llvm::PreservedAnalyses AddressSpaceInferencePass::run(llvm::Module &M,
                                                : llvm::Intrinsic::lifetime_end;
 
                   llvm::SmallVector<llvm::Type*> IntrinsicType {NewAI->getType()};
+#if LLVM_VERSION_MAJOR < 20
                   llvm::Function *LifetimeIntrinsic =
                       llvm::Intrinsic::getDeclaration(&M, Id, IntrinsicType);
+#else
+                  llvm::Function *LifetimeIntrinsic =
+                      llvm::Intrinsic::getOrInsertDeclaration(&M, Id, IntrinsicType);
+#endif
                   llvm::SmallVector<llvm::Value*> CallArgs{CB->getArgOperand(0), NewAI};
-                  llvm::CallInst::Create(llvm::FunctionCallee(LifetimeIntrinsic), CallArgs, "", CB);
+                  llvm::CallInst::Create(llvm::FunctionCallee(LifetimeIntrinsic), CallArgs, "", llvmutils::makeInsertionPoint(CB));
                 }
               }
             });

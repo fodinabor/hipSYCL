@@ -311,6 +311,11 @@ HIPSYCL_BUILTIN T __acpp_atomic_fetch_max(T *addr, T x, memory_order order,
   return x;
 }
 
+HIPSYCL_BUILTIN void __acpp_atomic_fence(memory_order order,
+                                         memory_scope scope) noexcept {
+  __atomic_thread_fence(builtin_memory_order(order));
+}
+
 }
 }
 }

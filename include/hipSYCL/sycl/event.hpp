@@ -60,14 +60,14 @@ public:
   {
     if(this->_node){
       if(!this->_node->is_submitted())
-        _requires_runtime.get()->dag().flush_sync();
+        _requires_runtime.get()->dag().flush_and_gc();
       
       assert(this->_node->is_submitted());
       this->_node->wait();
     }
   }
 
-  static void wait(const vector_class<event> &eventList)
+  static void wait(const std::vector<event> &eventList)
   {
     rt::runtime_keep_alive_token requires_runtime;
     // Only need a at most a single flush,
@@ -80,7 +80,7 @@ public:
           flush = true;
 
     if(flush)
-      requires_runtime.get()->dag().flush_sync();
+      requires_runtime.get()->dag().flush_and_gc();
 
     for(const event& evt: eventList){
       const_cast<event&>(evt).wait();
@@ -93,7 +93,7 @@ public:
     glue::throw_asynchronous_errors(_handler);
   }
 
-  static void wait_and_throw(const vector_class<event> &eventList)
+  static void wait_and_throw(const std::vector<event> &eventList)
   {
     wait(eventList);
 
@@ -129,7 +129,7 @@ public:
     // but the user thread waits for the instrumentation results
     // and so cannot submit more work.
     if(!this->_node->is_submitted())
-      _requires_runtime.get()->dag().flush_sync();
+      _requires_runtime.get()->dag().flush_and_gc();
 
     rt::execution_hints& hints = _node->get_execution_hints();
     // The regular SYCL API will always result in full profiling requested,

@@ -52,7 +52,7 @@ class automatic_placeholder_requirement_impl;
 using queue_submission_hooks =
   function_set<sycl::handler&>;
 using queue_submission_hooks_ptr = 
-  shared_ptr_class<queue_submission_hooks>;
+  std::shared_ptr<queue_submission_hooks>;
 
 }
 
@@ -108,6 +108,13 @@ struct AdaptiveCpp_priority : public detail::queue_property {
   : priority{queue_execution_priority} {}
 
   int priority;
+};
+
+struct AdaptiveCpp_inorder_executor : public detail::queue_property {
+  AdaptiveCpp_inorder_executor(const std::shared_ptr<rt::inorder_executor>& exec)
+  : executor{exec} {}
+
+  std::shared_ptr<rt::inorder_executor> executor;
 };
 
 struct AdaptiveCpp_retargetable : public detail::queue_property {};
@@ -349,7 +356,7 @@ public:
           // Flush DAG for non-submitted events. Note that this does not affect
           // instant nodes, as they immediately assume the submitted state.
           if(!most_recent_event->is_submitted())
-            _impl->requires_runtime.get()->dag().flush_sync();
+            _impl->requires_runtime.get()->dag().flush_and_gc();
           
           most_recent_event->wait();
         }
@@ -359,7 +366,7 @@ public:
         // Need to ensure everything is submitted before waiting on the stream
         // in case we have non-instant operations
         if(_impl->has_non_instant_operations.load(std::memory_order_relaxed))
-          _impl->requires_runtime.get()->dag().flush_sync();
+          _impl->requires_runtime.get()->dag().flush_and_gc();
         
         auto err = exec->wait();
         if(!err.is_success()) {
@@ -368,7 +375,7 @@ public:
         }
       }
     } else {
-      _impl->requires_runtime.get()->dag().flush_sync();
+      _impl->requires_runtime.get()->dag().flush_and_gc();
       _impl->requires_runtime.get()->dag().wait(_impl->node_group_id);
     }
   }
@@ -466,7 +473,7 @@ public:
 
       event evt = submit(prop_list, cgf);
       // Flush so that we see any errors during submission
-      _impl->requires_runtime.get()->dag().flush_sync();
+      _impl->requires_runtime.get()->dag().flush_and_gc();
 
       size_t num_errors_end =
           rt::application::errors().num_errors();
@@ -504,6 +511,40 @@ public:
   friend bool operator!=(const queue& lhs, const queue& rhs)
   { return !(lhs == rhs); }
 
+  bool khr_empty() const {
+    // Need flush-sync in case there are any non-instant nodes
+    _impl->requires_runtime.get()->dag().flush_and_gc();
+    if(is_in_order()) {
+      if(!_impl->needs_in_order_emulation) {
+        rt::inorder_executor* executor = AdaptiveCpp_inorder_executor();
+        assert(executor);
+
+        rt::inorder_queue_status status;
+        if(executor->get_queue()->query_status(status).is_success()) {
+          return status.is_complete();
+        }
+        return false;
+      } else {
+        rt::dag_node_ptr most_recent_event = nullptr;
+        {
+          std::lock_guard<std::mutex> lock{_impl->lock};
+          most_recent_event = _impl->previous_submission;
+        }
+        if(!most_recent_event)
+          return true;
+        return most_recent_event->is_complete();
+      }
+    } else {
+      auto nodes =
+          _impl->requires_runtime.get()->dag().get_group(_impl->node_group_id);
+      for(auto node : nodes){
+        if(!node->is_complete())
+          return false;
+      }
+      return true;
+    }
+  }
+
   std::vector<event> get_wait_list() {
     if(is_in_order()) {
       if(_impl->needs_in_order_emulation) {
@@ -527,7 +568,7 @@ public:
     } else {
       // for non-in-order queues we need to ask the runtime for
       // all nodes of this node group
-      _impl->requires_runtime.get()->dag().flush_sync();
+      _impl->requires_runtime.get()->dag().flush_and_gc();
       auto nodes =
           _impl->requires_runtime.get()->dag().get_group(_impl->node_group_id);
       std::vector<event> evts;
@@ -926,7 +967,7 @@ public:
   template <typename T, int dim, access_mode mode, target tgt,
             accessor_variant isPlaceholder>
   event copy(accessor<T, dim, mode, tgt, isPlaceholder> src,
-             shared_ptr_class<T> dest) {
+             std::shared_ptr<T> dest) {
     return this->submit([&](sycl::handler &cgh) {
       cgh.require(src);
       cgh.copy(src, dest);
@@ -935,7 +976,7 @@ public:
   
   template <typename T, int dim, access_mode mode, target tgt,
             accessor_variant isPlaceholder>
-  event copy(shared_ptr_class<T> src,
+  event copy(std::shared_ptr<T> src,
              accessor<T, dim, mode, tgt, isPlaceholder> dest) {
     return this->submit([&](sycl::handler &cgh) {
       cgh.require(dest);
@@ -1006,6 +1047,12 @@ public:
     return _impl->node_group_id;
   }
 
+  std::shared_ptr<rt::inorder_executor>
+  AdaptiveCpp_extract_inorder_executor() const {
+    return std::static_pointer_cast<rt::inorder_executor>(
+        _impl->dedicated_inorder_executor);
+  }
+
   rt::inorder_executor* AdaptiveCpp_inorder_executor() const {
     if(!_impl->dedicated_inorder_executor)
       return nullptr;
@@ -1066,13 +1113,6 @@ private:
         _impl->previous_submission = node;
       } else if(cgh.contains_non_instant_nodes()) {
         _impl->has_non_instant_operations.store(true, std::memory_order_relaxed);
-        // If we have instant submission enabled, non-emulated in-order queue
-        // but non-instant tasks, we need to flush the dag, otherwise future instant
-        // tasks might not wait on the tasks that have been cached in the dag
-        // builder.
-#if ACPP_ALLOW_INSTANT_SUBMISSION
-        _impl->requires_runtime.get()->dag().flush_sync();
-#endif
       }
     }
 
@@ -1149,12 +1189,18 @@ private:
       rt::device_id rt_dev = detail::extract_rt_device(this->get_device());
       // Dedicated executor may not be supported by all backends,
       // so this might return nullptr.
-      _impl->dedicated_inorder_executor =
-          _impl->requires_runtime.get()
-              ->backends()
-              .get(rt_dev.get_backend())
-              ->create_inorder_executor(rt_dev, priority);
-      
+      if(this->has_property<property::queue::AdaptiveCpp_inorder_executor>()) {
+        _impl->dedicated_inorder_executor =
+            this->get_property<property::queue::AdaptiveCpp_inorder_executor>()
+                .executor;
+      } else {
+        _impl->dedicated_inorder_executor =
+            _impl->requires_runtime.get()
+                ->backends()
+                .get(rt_dev.get_backend())
+                ->create_inorder_executor(rt_dev, priority);
+      }
+
       if(_impl->dedicated_inorder_executor) {
         _impl->default_hints.set_hint(
             rt::hints::prefer_executor{_impl->dedicated_inorder_executor});

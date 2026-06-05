@@ -34,16 +34,23 @@
 #include "hipSYCL/runtime/adaptivity_engine.hpp"
 #include "hipSYCL/runtime/omp/omp_code_object.hpp"
 
-#ifndef WIN32
+#ifndef _WIN32 // MSVC might not have #warning?
+#ifndef _OPENMP
+#warning Building omp backend with JIT support, but OpenMP parallelization is not available - kernels will run sequentially! This points to an issue in the build system.
+#endif
+#endif
+
+#ifndef _WIN32
 #include <unistd.h>
 #else
-#include <Windows.h>
+#include <windows.h>
 #endif
 #endif
 
 #include <omp.h>
 
 #include <memory>
+#include <optional>
 
 namespace hipsycl {
 namespace rt {
@@ -177,7 +184,7 @@ private:
 #ifdef HIPSYCL_WITH_SSCP_COMPILER
 
 std::size_t get_page_size() {
-#ifndef WIN32
+#ifndef _WIN32
   return static_cast<std::size_t>(sysconf(_SC_PAGESIZE));
 #else
   SYSTEM_INFO si;
@@ -206,12 +213,27 @@ launch_kernel_from_so(omp_sscp_executable_object::omp_sscp_kernel *kernel,
                       const rt::range<3> &num_groups,
                       const rt::range<3> &local_size, unsigned shared_memory,
                       void **kernel_args) {
+  // *** Do NOT change these values without changing also on the compiler side
+  //     in host/StaticLocalMemoryPass.cpp ***
+  // for internal use in group algorithms
+  constexpr std::size_t internal_local_memory = 1024 * sizeof(uint64_t);
+  // for local memory global variables
+  constexpr std::size_t static_local_mem_size = 1024 * 64 * sizeof(uint64_t);
+  std::size_t total_internal_local_mem_size =
+      internal_local_memory + static_local_mem_size;
+
   if (num_groups.size() == 1 && shared_memory == 0) {
     // still need to be able to support group algorithms
     // make thread-local in case we have multiple threads submitting.
+    //
+    // Note: This data array is also utilized to implement
+    // static local memory (i.e. globals in address space 3 of fixed size).
+    // At offset 0, internal memory is used for group algorithms,
+    // starting at offset 1024*sizeof(uint64_t) it is
+    // used for such static local memory.    
     static thread_local std::vector<char> internal_local_memory;
     auto aligned_internal_local_memory = resize_and_strongly_align(
-        internal_local_memory, local_size.size() * sizeof(uint64_t));
+        internal_local_memory, total_internal_local_mem_size);
 
     omp_sscp_executable_object::work_group_info info{
         num_groups, rt::id<3>{0, 0, 0}, local_size, nullptr,
@@ -236,7 +258,7 @@ launch_kernel_from_so(omp_sscp_executable_object::omp_sscp_kernel *kernel,
     auto aligned_local_memory =
         resize_and_strongly_align(local_memory, shared_memory);
     auto aligned_internal_local_memory = resize_and_strongly_align(
-        internal_local_memory, local_size.size() * sizeof(uint64_t));
+        internal_local_memory, total_internal_local_mem_size);
 #ifdef _OPENMP
 #pragma omp for collapse(3)
 #endif
@@ -389,10 +411,10 @@ result omp_queue::submit_kernel(kernel_operation &op, const dag_node_ptr& node) 
 
   auto backend_id = _backend_id;
   void* params = this;
-  rt::dag_node* node_ptr = node.get();
 
   omp_instrumentation_setup instrumentation_setup{op, node};
   _worker([=, &op]() {
+    rt::dag_node* node_ptr = node.get();
     auto instrumentation_guard = instrumentation_setup.instrument_task();
 
     auto err = op.get_launcher().invoke(backend_id, params, cap, node_ptr);
@@ -404,11 +426,11 @@ result omp_queue::submit_kernel(kernel_operation &op, const dag_node_ptr& node) 
 }
 
 result omp_queue::submit_sscp_kernel_from_code_object(
-    const kernel_operation &op, hcf_object_id hcf_object,
-    std::string_view kernel_name, const rt::hcf_kernel_info *kernel_info,
-    const rt::range<3> &num_groups, const rt::range<3> &group_size,
-    unsigned local_mem_size, void **args, std::size_t *arg_sizes,
-    std::size_t num_args, const kernel_configuration &initial_config) {
+    hcf_object_id hcf_object, std::string_view kernel_name,
+    const rt::hcf_kernel_info *kernel_info, const rt::range<3> &num_groups,
+    const rt::range<3> &group_size, unsigned local_mem_size, void **args,
+    std::size_t *arg_sizes, std::size_t num_args,
+    const kernel_configuration &initial_config) {
 #ifdef HIPSYCL_WITH_SSCP_COMPILER
   common::spin_lock_guard lock{_sscp_submission_spin_lock};
 
@@ -443,6 +465,17 @@ result omp_queue::submit_sscp_kernel_from_code_object(
   _config.append_base_configuration(
       kernel_base_config_parameter::hcf_object_id, hcf_object);
 
+  for(const auto& flag : kernel_info->get_compilation_flags())
+    _config.set_build_flag(flag);
+  for(const auto& opt : kernel_info->get_compilation_options())
+    _config.set_build_option(opt.first, opt.second);
+
+  std::optional<jitopt_host_vector_math_library> host_veclib =
+      application::get_settings().get<setting::jitopt_host_vector_math_library>();
+  if(host_veclib.has_value())
+    _config.set_build_option(kernel_build_option::host_vector_math_library,
+        static_cast<int>(*host_veclib));
+
   auto binary_configuration_id =
       adaptivity_engine.finalize_binary_configuration(_config);
   auto code_object_configuration_id = binary_configuration_id;
@@ -463,8 +496,10 @@ result omp_queue::submit_sscp_kernel_from_code_object(
         compiler::createLLVMToHostTranslator(kernel_names);
 
     // Lower kernels to binary
-    auto err = glue::jit::compile(translator.get(), hcf, selected_image_name,
-                                  _config, _reflection_map, compiled_image);
+    rt::result err = glue::jit::compile_and_store_stats(
+        translator.get(), hcf_object, selected_image_name, _config,
+        binary_configuration_id, _reflection_map, compiled_image,
+        false);
 
     if (!err.is_success()) {
       register_error(err);
@@ -492,6 +527,9 @@ result omp_queue::submit_sscp_kernel_from_code_object(
         << "omp_queue: Successfully compiled SSCP kernels to module "
         << exec_obj->get_module() << std::endl;
 
+    glue::jit::load_jit_output_metadata(*exec_obj, false,
+                                        binary_configuration_id);
+
     return exec_obj;
   };
 
@@ -508,8 +546,10 @@ result omp_queue::submit_sscp_kernel_from_code_object(
       static_cast<const omp_sscp_executable_object *>(obj)->get_kernel(
           kernel_name);
 
-  return launch_kernel_from_so(kernel, num_groups, group_size, local_mem_size,
-                               _arg_mapper.get_mapped_args());
+  auto err = launch_kernel_from_so(kernel, num_groups, group_size, local_mem_size,
+                                   _arg_mapper.get_mapped_args());
+  on_kernel_launch_complete(kernel_name, obj);
+  return err;
 
 #else
   return make_error(
@@ -619,7 +659,7 @@ result omp_sscp_code_object_invoker::submit_kernel(
     const kernel_configuration &config) {
 
   return _queue->submit_sscp_kernel_from_code_object(
-      op, hcf_object, kernel_name, kernel_info, num_groups, group_size,
+      hcf_object, kernel_name, kernel_info, num_groups, group_size,
       local_mem_size, args, arg_sizes, num_args, config);
 }
 

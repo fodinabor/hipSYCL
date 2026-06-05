@@ -14,7 +14,7 @@
 #include "hipSYCL/common/stable_running_hash.hpp"
 #include "hipSYCL/common/debug.hpp"
 
-#include "hipSYCL/runtime/settings.hpp"
+#include "hipSYCL/common/settings.hpp"
 
 #include <fstream>
 #include <memory>
@@ -53,33 +53,75 @@ inline T random_number() {
 
 }
 
-std::string get_install_directory() {
+
+std::string get_lib_directory() {
 
   std::vector<fs::path> paths;
 #ifndef _WIN32
   Dl_info info;
   if (dladdr(reinterpret_cast<void*>(&get_install_directory), &info)) {
     auto lib_path = fs::path{info.dli_fname}.parent_path();
-    if(lib_path.has_parent_path())
-      paths.emplace_back(lib_path.parent_path());
+    paths.emplace_back(lib_path);
   }
   
 #else
-  if(HMODULE handle = GetModuleHandleA(HIPSYCL_COMMON_LIBRARY_NAME))
+  std::string library_name = HIPSYCL_COMMON_LIBRARY_NAME;
+  if(HMODULE handle = GetModuleHandleA(library_name.c_str()))
   {
     std::vector<char> path_buffer(MAX_PATH);
     if(GetModuleFileNameA(handle, path_buffer.data(), path_buffer.size()))
     {
       auto lib_path = fs::path{path_buffer.data()}.parent_path();
-      if(lib_path.has_parent_path())
-        paths.emplace_back(lib_path.parent_path());
+      paths.emplace_back(lib_path);
     }
   }
   
 #endif
-  if(paths.empty() || !fs::is_directory(paths.back()))
-    return fs::path{HIPSYCL_INSTALL_PREFIX}.string();
+  if(paths.empty() || !fs::is_directory(paths.back())) {
+    return join_path(HIPSYCL_INSTALL_PREFIX, "lib");
+  }
   return paths.back().string();
+}
+
+std::string get_install_directory() {
+  auto lib_path = fs::path{get_lib_directory()};
+  if(lib_path.has_parent_path())
+    return lib_path.parent_path().string();
+  return lib_path.string();
+}
+
+
+std::string get_this_executable_path(std::string* filename,
+                                    std::string* directory) {
+  auto get_path = []() -> std::string{
+#ifndef _WIN32
+    char result[PATH_MAX];
+    ssize_t num_read = readlink("/proc/self/exe", result, PATH_MAX);
+    if (num_read >= 0 && num_read <= PATH_MAX - 1) {
+      result[num_read] = '\0';
+      return std::string{result};
+    }
+    return std::string{};
+#else
+    std::vector<char> path_buff;
+    DWORD copied = 0;
+    do {
+      path_buff.resize(path_buff.size() + MAX_PATH);
+      copied = GetModuleFileNameA(0, path_buff.data(), path_buff.size());
+    } while (copied >= path_buff.size());
+
+    path_buff.resize(copied);
+
+    return std::string{path_buff.begin(), path_buff.end()};
+#endif
+  };
+
+  std::string path = get_path();
+  if(filename)
+    *filename = path.empty() ? "" : fs::path{path}.filename().string();
+  if(directory)
+    *directory = path.empty() ? "" : fs::path{path}.parent_path().string();
+  return path;
 }
 
 std::string join_path(const std::string& base, const std::string& extra) {
@@ -96,10 +138,10 @@ join_path(const std::string &base,
   return current;
 }
 
-std::vector<std::string> list_regular_files(const std::string& directory) {
+std::vector<std::string> list_regular_files(const std::string& directory, std::error_code &EC) {
   fs::path p{directory};
   std::vector<std::string> result;
-  for(const fs::directory_entry& entry : fs::directory_iterator(p)) {
+  for(const fs::directory_entry& entry : fs::directory_iterator(p, EC)) {
     if(fs::is_regular_file(entry.status())) {
       result.push_back(entry.path().string());
     }
@@ -108,15 +150,20 @@ std::vector<std::string> list_regular_files(const std::string& directory) {
 }
 
 std::vector<std::string> list_regular_files(const std::string& directory,
-  const std::string& extension) { 
+                                            const std::string& extension,
+                                            std::error_code &EC) { 
   
-  auto all_files = list_regular_files(directory);
+  auto all_files = list_regular_files(directory, EC);
   std::vector<std::string> result;
   for(const auto& f : all_files) {
     if(fs::path(f).extension().string() == extension)
       result.push_back(f);
   }
   return result;
+}
+
+ACPP_COMMON_EXPORT std::string filename(const std::string& path) {
+  return fs::path{path}.filename().string();
 }
 
 bool exists(const std::string& path) {
@@ -153,10 +200,15 @@ bool remove(const std::string &filename) {
   return false;
 }
 
+persistent_storage &persistent_storage::get() {
+  static persistent_storage t;
+  return t;
+}
+
 persistent_storage::persistent_storage() {
-#ifndef _WIN32
 
   auto get_home = [](std::string &home_out, std::string &subdirectory) -> bool {
+#ifndef _WIN32
     if(const char* home = std::getenv("XDG_DATA_HOME")) {
       home_out = home;
       subdirectory = "acpp";
@@ -168,18 +220,24 @@ persistent_storage::persistent_storage() {
       subdirectory = ".acpp";
       return true;
     }
-        
+
     const char* home = getpwuid(getuid())->pw_dir;
     if(home) {
       home_out = home;
       subdirectory = ".acpp";
       return true;
     }
-
+#else
+    if (const char* lad = std::getenv("LOCALAPPDATA")) {
+      home_out = lad;
+      subdirectory = "acpp";
+      return true;
+    }
+#endif
     return false;
   };
 
-  if(!rt::try_get_environment_variable("appdb_dir", _base_dir)) {
+  if(!settings::try_retrieve_settings_variable("appdb_dir", _base_dir)) {
     std::string home, subdirectory;
     if (get_home(home, subdirectory)) {
       _base_dir = (fs::path{home} / subdirectory).string();
@@ -188,24 +246,8 @@ persistent_storage::persistent_storage() {
     }
   }
 
-  auto get_app_path = []() -> std::string{
-
-    char result[PATH_MAX];
-    ssize_t num_read = readlink("/proc/self/exe", result, PATH_MAX);
-    if(num_read >= 0 && num_read <= PATH_MAX - 1) {
-      result[num_read] = '\0';
-      return std::string{result};
-    }
-    return std::string{};
-  };
-
-  std::string app_path = get_app_path();
+  std::string app_path = get_this_executable_path();
   _this_app_dir = generate_app_dir(app_path);
-  
-#else
-  _base_dir = (fs::current_path() / ".acpp").string();
-  _this_app_dir = (fs::path{_base_dir} / "apps" / "global").string();
-#endif
 
    _jit_cache_dir = (fs::path{_this_app_dir} / "jit-cache").string();
 
@@ -213,11 +255,7 @@ persistent_storage::persistent_storage() {
   fs::create_directories(_this_app_dir);
   fs::create_directories(_jit_cache_dir);
 
-#ifndef _WIN32
   _this_app_db = std::make_unique<db::appdb>(generate_appdb_path(app_path));
-#else
-  _this_app_db = std::make_unique<db::appdb>(generate_appdb_path(""));
-#endif
 }
 
 std::string persistent_storage::generate_app_dir(const std::string& app_path) const {

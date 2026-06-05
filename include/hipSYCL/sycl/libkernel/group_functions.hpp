@@ -19,6 +19,7 @@
 #include "sub_group.hpp"
 #include "vec.hpp"
 
+#include <iterator>
 #include <type_traits>
 
 
@@ -91,11 +92,7 @@ HIPSYCL_BUILTIN T group_broadcast(Group g, T x, typename Group::id_type local_id
 // barrier
 template <class Group, std::enable_if_t<is_group_v<std::decay_t<Group>>, bool> = true>
 HIPSYCL_BUILTIN void group_barrier(Group g) {
-  if constexpr (std::is_same_v<Group, sub_group> && USE_RV) {
-    return;
-  } else {
-    HIPSYCL_DISPATCH_GROUP_ALGORITHM(__acpp_group_barrier, g);
-  }
+  HIPSYCL_DISPATCH_GROUP_ALGORITHM(__acpp_group_barrier, g);
 }
 
 template <class Group, std::enable_if_t<is_group_v<std::decay_t<Group>>, bool> = true>
@@ -162,23 +159,6 @@ HIPSYCL_BUILTIN T reduce_over_group(Group g, T x, BinaryOperation binary_op) {
   HIPSYCL_RETURN_DISPATCH_GROUP_ALGORITHM(__acpp_reduce_over_group, g, x, binary_op);
 }
 
-// exclusive_scan
-template <typename Group, typename InPtr, typename OutPtr, typename T, typename BinaryOperation,
-          std::enable_if_t<is_group_v<std::decay_t<Group>>, bool> = true>
-HIPSYCL_BUILTIN OutPtr joint_exclusive_scan(Group g, InPtr first, InPtr last, OutPtr result, T init,
-                                            BinaryOperation binary_op) {
-  HIPSYCL_RETURN_DISPATCH_GROUP_ALGORITHM(__acpp_joint_exclusive_scan, g, first, last, result, init,
-                                          binary_op);
-}
-
-template <typename Group, typename InPtr, typename OutPtr, typename BinaryOperation,
-          std::enable_if_t<is_group_v<std::decay_t<Group>>, bool> = true>
-HIPSYCL_BUILTIN OutPtr joint_exclusive_scan(Group g, InPtr first, InPtr last, OutPtr result,
-                                            BinaryOperation binary_op) {
-  HIPSYCL_RETURN_DISPATCH_GROUP_ALGORITHM(__acpp_joint_exclusive_scan, g, first, last, result,
-                                          binary_op);
-}
-
 template<class Group, typename V, typename T, typename BinaryOperation,
           std::enable_if_t<is_group_v<std::decay_t<Group>>, bool> = true>
 HIPSYCL_BUILTIN
@@ -193,23 +173,7 @@ HIPSYCL_BUILTIN T exclusive_scan_over_group(Group g, T x, BinaryOperation binary
   HIPSYCL_RETURN_DISPATCH_GROUP_ALGORITHM(__acpp_exclusive_scan_over_group, g, x, binary_op);
 }
 
-template <typename Group, typename InPtr, typename OutPtr, typename T, typename BinaryOperation,
-          std::enable_if_t<is_group_v<std::decay_t<Group>>, bool> = true>
-HIPSYCL_BUILTIN OutPtr joint_inclusive_scan(Group g, InPtr first, InPtr last, OutPtr result,
-                                            BinaryOperation binary_op, T init) {
-  HIPSYCL_RETURN_DISPATCH_GROUP_ALGORITHM(__acpp_joint_inclusive_scan, g, first, last, result,
-                                          binary_op, init);
-}
-
-template <typename Group, typename InPtr, typename OutPtr, typename BinaryOperation,
-          std::enable_if_t<is_group_v<std::decay_t<Group>>, bool> = true>
-HIPSYCL_BUILTIN OutPtr joint_inclusive_scan(Group g, InPtr first, InPtr last, OutPtr result,
-                                            BinaryOperation binary_op) {
-  HIPSYCL_RETURN_DISPATCH_GROUP_ALGORITHM(__acpp_joint_inclusive_scan, g, first, last, result,
-                                          binary_op);
-}
-
-template <class Group, class T, typename BinaryOperation,
+template<class Group, class T, typename BinaryOperation,
           std::enable_if_t<is_group_v<std::decay_t<Group>>, bool> = true>
 HIPSYCL_BUILTIN T inclusive_scan_over_group(Group g, T x, BinaryOperation binary_op) {
   HIPSYCL_RETURN_DISPATCH_GROUP_ALGORITHM(__acpp_inclusive_scan_over_group, g, x, binary_op);
@@ -217,8 +181,10 @@ HIPSYCL_BUILTIN T inclusive_scan_over_group(Group g, T x, BinaryOperation binary
 
 template <typename Group, typename V, typename T, typename BinaryOperation,
           std::enable_if_t<is_group_v<std::decay_t<Group>>, bool> = true>
-HIPSYCL_BUILTIN T inclusive_scan_over_group(Group g, V x, T init, BinaryOperation binary_op) {
-  HIPSYCL_RETURN_DISPATCH_GROUP_ALGORITHM(__acpp_inclusive_scan_over_group, g, x, init, binary_op);
+HIPSYCL_BUILTIN
+T inclusive_scan_over_group(Group g, V x, BinaryOperation binary_op, T init) {
+  HIPSYCL_RETURN_DISPATCH_GROUP_ALGORITHM(__acpp_inclusive_scan_over_group,
+                                          g, x, binary_op, init);
 }
 
 // shift_left
@@ -274,6 +240,111 @@ template <typename Group, typename V, typename T, typename BinaryOperation,
 HIPSYCL_BUILTIN T reduce_over_group(Group g, V x, T init, BinaryOperation binary_op) {
   T reduction = reduce_over_group(g, T{x}, binary_op);
   return binary_op(reduction, init);
+}
+
+// exclusive_scan
+template <typename Group, typename InPtr, typename OutPtr, typename T,
+          typename BinaryOperation,
+          std::enable_if_t<is_group_v<std::decay_t<Group>>, bool> = true>
+HIPSYCL_BUILTIN OutPtr joint_exclusive_scan(Group g, InPtr first, InPtr last, OutPtr result,
+                                                   T init, BinaryOperation binary_op) {
+  static_assert(std::is_same_v<decltype(binary_op(init, *first)), T>);
+  constexpr auto identity = known_identity_v<BinaryOperation, T>;
+
+  size_t num_elements = last - first;
+  T carry_over = init;
+
+  __acpp_if_target_host(
+    if (g.leader()) {
+      for (size_t i = 0; i < num_elements; i++) {
+        T next = first[i];
+        result[i] = carry_over;
+        carry_over = binary_op(carry_over, next);
+      }
+    }
+    group_barrier(g);
+  ) else {
+    size_t lrange = g.get_local_range().size();
+    size_t lid = g.get_local_linear_id();
+    size_t num_segments = (num_elements + lrange - 1) / lrange;
+
+    for (size_t segment = 0; segment < num_segments; segment++) {
+      size_t element_idx = segment * lrange + lid;
+      auto local_element = element_idx < num_elements ? first[element_idx] : identity;
+
+      T segment_result = exclusive_scan_over_group(g, local_element, carry_over, binary_op);
+      if (element_idx < num_elements) {
+        result[element_idx] = segment_result;
+      }
+      carry_over = group_broadcast(g, binary_op(segment_result, local_element), lrange - 1);
+    }
+  }
+  return result + num_elements;
+}
+
+template <typename Group, typename InPtr, typename OutPtr,
+          typename BinaryOperation,
+          std::enable_if_t<is_group_v<std::decay_t<Group>>, bool> = true>
+HIPSYCL_BUILTIN OutPtr joint_exclusive_scan(Group g, InPtr first, InPtr last, OutPtr result,
+                                                   BinaryOperation binary_op) {
+  
+  using value_type = typename std::iterator_traits<OutPtr>::value_type;
+  static_assert(std::is_same_v<decltype(binary_op(*first, *first)), value_type>);
+  
+  constexpr auto identity = known_identity_v<BinaryOperation, value_type>;
+  return joint_exclusive_scan(g, first, last, result, identity, binary_op);
+}
+
+// inclusive_scan
+template <typename Group, typename InPtr, typename OutPtr, typename T,
+          typename BinaryOperation,
+          std::enable_if_t<is_group_v<std::decay_t<Group>>, bool> = true>
+HIPSYCL_BUILTIN OutPtr joint_inclusive_scan(Group g, InPtr first, InPtr last, OutPtr result,
+                                                   BinaryOperation binary_op, T init) {
+  static_assert(std::is_same_v<decltype(binary_op(init, *first)), T>);
+  constexpr auto identity = known_identity_v<BinaryOperation, T>;
+
+  size_t num_elements = last - first;
+  T carry_over = init;
+
+  __acpp_if_target_host(
+    if (g.leader()) {
+      for (size_t i = 0; i < num_elements; i++) {
+        carry_over = binary_op(carry_over, first[i]);
+        result[i] = carry_over;
+      }
+    }
+    group_barrier(g);
+  ) else {
+    size_t lrange = g.get_local_range().size();
+    size_t lid = g.get_local_linear_id();
+    size_t num_segments = (num_elements + lrange - 1) / lrange;
+
+    for (size_t segment = 0; segment < num_segments; segment++) {
+      size_t element_idx = segment * lrange + lid;
+      auto local_element = element_idx < num_elements ? first[element_idx] : identity;
+
+      T segment_result = inclusive_scan_over_group(g, local_element, binary_op, carry_over);
+      if (element_idx < num_elements) {
+        result[element_idx] = segment_result;
+      }
+      carry_over = group_broadcast(g, segment_result, lrange - 1);
+    }
+  }
+  return result + num_elements;
+}
+
+template <typename Group, typename InPtr, typename OutPtr,
+          typename BinaryOperation,
+          std::enable_if_t<is_group_v<std::decay_t<Group>>, bool> = true>
+HIPSYCL_BUILTIN OutPtr joint_inclusive_scan(Group g, InPtr first, InPtr last, OutPtr result,
+                                                   BinaryOperation binary_op) {
+  
+  using value_type = typename std::iterator_traits<OutPtr>::value_type;
+  static_assert(std::is_same_v<decltype(binary_op(*first, *first)), value_type>);
+  
+  constexpr auto identity = known_identity_v<BinaryOperation, value_type>;
+  return joint_inclusive_scan(g, first, last, result, binary_op, identity);
 }
 
 } // namespace sycl

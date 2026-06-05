@@ -567,11 +567,11 @@ result hip_queue::submit_multipass_kernel_from_code_object(
 }
 
 result hip_queue::submit_sscp_kernel_from_code_object(
-    const kernel_operation &op, hcf_object_id hcf_object,
-    std::string_view kernel_name, const rt::hcf_kernel_info *kernel_info,
-    const rt::range<3> &num_groups, const rt::range<3> &group_size,
-    unsigned local_mem_size, void **args, std::size_t *arg_sizes,
-    std::size_t num_args, const kernel_configuration &initial_config) {
+    hcf_object_id hcf_object, std::string_view kernel_name,
+    const rt::hcf_kernel_info *kernel_info, const rt::range<3> &num_groups,
+    const rt::range<3> &group_size, unsigned local_mem_size, void **args,
+    std::size_t *arg_sizes, std::size_t num_args,
+    const kernel_configuration &initial_config) {
 #ifdef HIPSYCL_WITH_SSCP_COMPILER
   this->activate_device();
   
@@ -619,6 +619,8 @@ result hip_queue::submit_sscp_kernel_from_code_object(
 
   _config.set_build_option(kernel_build_option::amdgpu_target_device,
                           target_arch_name);
+  _config.set_build_option(kernel_build_option::desired_subgroup_size,
+                          ctx->get_wavefront_size());
 
   auto binary_configuration_id = adaptivity_engine.finalize_binary_configuration(_config);
   auto code_object_configuration_id = binary_configuration_id;
@@ -641,16 +643,11 @@ result hip_queue::submit_sscp_kernel_from_code_object(
       compiler::createLLVMToAmdgpuTranslator(kernel_names);
 
     // Lower kernels
-    rt::result err;
-    if(kernel_names.size() == 1) {
-      err = glue::jit::dead_argument_elimination::compile_kernel(
-          translator.get(), hcf_object, selected_image_name, _config,
-          binary_configuration_id, _reflection_map, compiled_image);
-    } else {
-      err =
-          glue::jit::compile(translator.get(), hcf_object, selected_image_name,
-                             _config, _reflection_map, compiled_image);
-    }
+    bool enable_dead_arg_elimination = kernel_names.size() == 1;
+    rt::result err = glue::jit::compile_and_store_stats(
+        translator.get(), hcf_object, selected_image_name, _config,
+        binary_configuration_id, _reflection_map, compiled_image,
+        enable_dead_arg_elimination);
     
     if(!err.is_success()) {
       register_error(err);
@@ -679,10 +676,9 @@ result hip_queue::submit_sscp_kernel_from_code_object(
       return nullptr;
     }
 
-    if(kernel_names.size() == 1)
-      exec_obj->get_jit_output_metadata().kernel_retained_arguments_indices =
-          glue::jit::dead_argument_elimination::
-              retrieve_retained_arguments_mask(binary_configuration_id);
+    bool has_dead_arg_elimination = kernel_names.size() == 1;
+    glue::jit::load_jit_output_metadata(*exec_obj, has_dead_arg_elimination,
+                                        binary_configuration_id);
 
     return exec_obj;
   };
@@ -707,11 +703,14 @@ result hip_queue::submit_sscp_kernel_from_code_object(
       static_cast<const hip_executable_object *>(obj)->get_module();
   assert(module);
 
-  return launch_kernel_from_module(
+  auto err = launch_kernel_from_module(
       module, kernel_name, num_groups, group_size, local_mem_size, _stream,
       _arg_mapper.get_mapped_args(),
       const_cast<std::size_t *>(_arg_mapper.get_mapped_arg_sizes()),
       _arg_mapper.get_mapped_num_args());
+
+  on_kernel_launch_complete(kernel_name, obj);
+  return err;
 #else
   return make_error(
       __acpp_here(),
@@ -755,7 +754,7 @@ result hip_sscp_code_object_invoker::submit_kernel(
     const kernel_configuration &config) {
 
   return _queue->submit_sscp_kernel_from_code_object(
-      op, hcf_object, kernel_name, kernel_info, num_groups, group_size,
+      hcf_object, kernel_name, kernel_info, num_groups, group_size,
       local_mem_size, args, arg_sizes, num_args, config);
 }
 }

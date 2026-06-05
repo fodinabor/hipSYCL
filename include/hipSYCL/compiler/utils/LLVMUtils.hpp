@@ -12,6 +12,7 @@
 #define HIPSYCL_LLVMUTILS_HPP
 
 #include <llvm/ADT/StringRef.h>
+#include <llvm/IR/Instruction.h>
 #if LLVM_VERSION_MAJOR < 16
 #define IS_OPAQUE(pointer) (pointer->isOpaquePointerTy())
 #define HAS_TYPED_PTR 1
@@ -22,21 +23,37 @@
 
 namespace hipsycl::llvmutils {
 
-  inline bool starts_with(llvm::StringRef String, llvm::StringRef Prefix) {
+inline bool starts_with(llvm::StringRef String, llvm::StringRef Prefix) {
 #if LLVM_VERSION_MAJOR < 18
-    return String.startswith(Prefix);
+  return String.startswith(Prefix);
 #else
-    return String.starts_with(Prefix);
+  return String.starts_with(Prefix);
 #endif
-  }
+}
 
-  inline bool ends_with(llvm::StringRef String, llvm::StringRef Prefix) {
+inline bool ends_with(llvm::StringRef String, llvm::StringRef Prefix) {
 #if LLVM_VERSION_MAJOR < 18
-    return String.endswith(Prefix);
+  return String.endswith(Prefix);
 #else
-    return String.ends_with(Prefix);
+  return String.ends_with(Prefix);
 #endif
-  }
-}// namespace hipsycl::llvmutils
+}
+
+inline auto makeInsertionPoint(llvm::Instruction *InsertionPt) {
+#if LLVM_VERSION_MAJOR < 20
+  return InsertionPt;
+#else
+  return InsertionPt->getIterator();
+#endif
+}
+
+inline llvm::Instruction *getNextNonDebugInstruction(llvm::Instruction *I) {
+#if LLVM_VERSION_MAJOR < 22
+  return I->getNextNonDebugInstruction();
+#else
+  return I->getNextNode();
+#endif
+}
+} // namespace hipsycl::llvmutils
 
 #endif // HIPSYCL_LLVMUTILS_HPP

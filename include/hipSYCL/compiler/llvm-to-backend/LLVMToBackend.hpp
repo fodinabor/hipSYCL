@@ -11,6 +11,11 @@
 #ifndef HIPSYCL_LLVM_TO_BACKEND_HPP
 #define HIPSYCL_LLVM_TO_BACKEND_HPP
 
+#ifndef _WIN32
+#define ACPP_BACKEND_API_EXPORT
+#else
+#define ACPP_BACKEND_API_EXPORT __declspec(dllexport)
+#endif
 
 // Note: This file should not include any LLVM headers or include
 // dependencies that rely on LLVM headers in order to not spill
@@ -23,6 +28,7 @@
 #include <typeinfo>
 #include <functional>
 #include "AddressSpaceMap.hpp"
+#include "hipSYCL/compiler/llvm-to-backend/NameHandling.hpp"
 #include "hipSYCL/glue/llvm-sscp/jit-reflection/queries.hpp"
 #include "hipSYCL/runtime/util.hpp"
 
@@ -36,10 +42,9 @@ namespace compiler {
 
 struct PassHandler;
 
-struct TranslationHints {
-  std::optional<std::size_t> RequestedLocalMemSize;
-  std::optional<std::size_t> SubgroupSize;
-  std::optional<rt::range<3>> WorkGroupSize;
+struct KernelStats {
+  std::string Name;
+  bool IsFreeOfIndirectAccess;
 };
 
 class LLVMToBackendTranslator {
@@ -51,6 +56,7 @@ public:
   virtual ~LLVMToBackendTranslator() {}
 
   void setNoAliasKernelParam(const std::string& KernelName, int ParamIndex);
+  void setNoAliasIfNoIndirectAccessKernelParam(const std::string &KernelName, int ParamIndex);
   void specializeKernelArgument(const std::string &KernelName, int ParamIndex,
                                 const void *ValueBuffer);
   void specializeFunctionCalls(const std::string &FuncName,
@@ -93,6 +99,10 @@ public:
 
   const std::vector<std::string>& getKernels () const {
     return Kernels;
+  }
+
+  const std::vector<KernelStats>& getCompiledKernelStats() const {
+    return KernelCompilationStats;
   }
 
   std::string getErrorLogAsString() const {
@@ -209,6 +219,9 @@ protected:
   bool GlobalSizesFitInInt = false;
   bool IsFastMath = false;
 
+  // If runtime/user wants a specific subgroup size, this value will be > 0.
+  int DesiredSubgroupSize = -1;
+
 private:
 
   void resolveExternalSymbols(llvm::Module& M);
@@ -237,10 +250,13 @@ private:
 
   std::vector<std::pair<std::string, std::vector<int>*>> FunctionsForDeadArgumentElimination;
   std::unordered_map<std::string, std::vector<int>> NoAliasParameters;
+  std::unordered_map<std::string, std::vector<int>> NoAliasIfNoIndirectAccessParameters;
 
   // map from kernel name to list of (param index, alignment)
   std::unordered_map<std::string, std::vector<std::pair<int, int>>> KnownPtrParamAlignments;
   std::unordered_map<std::string, uint64_t> ReflectionFields;
+
+  std::vector<KernelStats> KernelCompilationStats;
 
 };
 

@@ -32,7 +32,6 @@
 #include <llvm/IR/Type.h>
 #include <llvm/Support/Casting.h>
 #include <llvm/Transforms/Utils/Cloning.h>
-#include "hipSYCL/RV.h"
 
 namespace hipsycl {
 namespace compiler {
@@ -92,6 +91,9 @@ llvm::Function *makeWrapperFunction(llvm::Function &F, std::int64_t DynamicLocal
   auto Wrapper = llvm::cast<llvm::Function>(
       M->getOrInsertFunction(FName, WrapperT, F.getAttributes()).getCallee());
   Wrapper->setLinkage(llvm::GlobalValue::LinkageTypes::ExternalLinkage);
+#ifdef _WIN32
+  Wrapper->setDLLStorageClass(llvm::GlobalValue::DLLStorageClassTypes::DLLExportStorageClass);
+#endif
 
   auto WrapperBB = llvm::BasicBlock::Create(Ctx, "entry", Wrapper);
   Bld.SetInsertPoint(WrapperBB);

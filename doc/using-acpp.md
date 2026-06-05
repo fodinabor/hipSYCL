@@ -4,7 +4,7 @@ It is recommended that the CMake integration be used for larger projects (see th
 
 ## Using `acpp`
 
-`acpp` can be invoked like a regular compiler (e.g. `acpp -O3 -o test test.cpp`). It supports multiple compilation flows. A typical installation (i.e. when AdaptiveCpp was built against LLVM >= 14 and the generic SSCP compiler was not explicitly disabled) uses the `generic` compilation flow by default. This compilation flow usually compiles the quickest, produces the fastest binaries, and its generated binaries can run on all supported devices. **Unless you have very specific needs, you should probably use the default `generic` compiler.**
+`acpp` can be invoked like a regular compiler (e.g. `acpp -O3 -o test test.cpp`). It supports multiple compilation flows. A typical installation (i.e. when AdaptiveCpp was built against LLVM >= 15 and the generic SSCP compiler was not explicitly disabled) uses the `generic` compilation flow by default. This compilation flow usually compiles the quickest, produces the fastest binaries, and its generated binaries can run on all supported devices. **Unless you have very specific needs, you should probably use the default `generic` compiler.**
 
 Advanced users or users with more specific needs may want to specify compilation flows explicitly. This is achieved with the `--acpp-targets="compilation-flow1:target1,target2,...;compilation-flow2:..."` command line argument, the `ACPP_TARGETS` environment variable or the `ACPP_TARGETS` CMake variable.
 
@@ -213,7 +213,7 @@ Options are:
       * omp - OpenMP CPU backend
                Backend Flavors:
                - omp.library-only: Works with any OpenMP enabled CPU compiler.
-                                   Uses Boost.Fiber for nd_range parallel_for support.
+                                   Uses Minicoro for nd_range parallel_for support.
                - omp.accelerated: Uses clang as host compiler to enable compiler support
                                   for nd_range parallel_for (see --acpp-use-accelerated-cpu).
       * cuda - CUDA backend

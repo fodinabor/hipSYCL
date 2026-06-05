@@ -20,26 +20,24 @@ using rel_test_genfloats = boost::mp11::mp_list<
   float,
   // vec<T,1> is not genfloat according to SYCL 2020. It's unclear
   // if this is an oversight or intentional.
-  //cl::sycl::vec<float, 1>
-  cl::sycl::vec<float, 2>,
-  cl::sycl::vec<float, 3>,
-  cl::sycl::vec<float, 4>,
-  cl::sycl::vec<float, 8>,
-  cl::sycl::vec<float, 16>,
+  // sycl::vec<float, 1>
+  sycl::vec<float, 2>,
+  sycl::vec<float, 3>,
+  sycl::vec<float, 4>,
+  sycl::vec<float, 8>,
+  sycl::vec<float, 16>,
   double,
-  //cl::sycl::vec<double, 1>,
-  cl::sycl::vec<double, 2>,
-  cl::sycl::vec<double, 3>,
-  cl::sycl::vec<double, 4>,
-  cl::sycl::vec<double, 8>,
-  cl::sycl::vec<double, 16>>;
-
-
+  // sycl::vec<double, 1>,
+  sycl::vec<double, 2>,
+  sycl::vec<double, 3>,
+  sycl::vec<double, 4>,
+  sycl::vec<double, 8>,
+  sycl::vec<double, 16>>;
 
 namespace {
 
   template<typename DT, int D>
-  using vec = cl::sycl::vec<DT, D>;
+  using vec = sycl::vec<DT, D>;
 
   // utility type traits for generic testing
 
@@ -71,6 +69,8 @@ namespace {
   auto get_subvector(const vec<DT, 16> &v) {
     if constexpr(D==0) {
       return v.template swizzle<0>();
+    } else if constexpr(D==1) {
+      return vec<DT, 1>{v.template swizzle<0>()};
     } else if constexpr(D==2) {
       return vec<DT, 2>{v.template swizzle<0,1>()};
     } else if constexpr(D==3) {
@@ -102,16 +102,22 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(rel_genfloat_unary, T,
   constexpr int D = vector_length_v<T>;
   using DT = vector_elem_t<T>;
 
-  namespace s = cl::sycl;
+  namespace s = sycl;
 
-  using IntType = typename std::conditional_t<std::is_same_v<DT, float>, int32_t, int64_t>;
-  using OutType = typename s::detail::builtin_type_traits<T>::template alternative_data_type<IntType>;
+  using OutType = s::detail::builtin_input_boollike_t<T>;
+  using BoolType = s::detail::builtin_input_element_t<OutType>;
 
   constexpr int FUN_COUNT = 5;
 
   // build inputs and allocate outputs
 
   s::queue queue;
+  if constexpr(std::is_same_v<DT, double>) {
+    if (!queue.get_device().has(sycl::aspect::fp64)) {
+      BOOST_TEST_MESSAGE("Skipping test for double since device has no fp64 support");
+      return;
+    }
+  }
   s::buffer<T> in{{1}};
   s::buffer<OutType> out{{FUN_COUNT}};
   {
@@ -126,7 +132,7 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(rel_genfloat_unary, T,
 		     -1.0, 17.0, -4.0, -2.0, 3.0};
     inputs[0] = get_subvector<DT, D>(v);
     for(int i = 0; i < FUN_COUNT; ++i) {
-      outputs[i] = OutType{IntType{0}};
+      outputs[i] = OutType{BoolType{0}};
     }
   }
 
@@ -162,6 +168,129 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(rel_genfloat_unary, T,
       BOOST_TEST(comp(outputs[i++], c) == std::isnormal(comp(inputs[0], c)));
 #endif
       BOOST_TEST(comp(outputs[i++], c) == std::signbit(comp(inputs[0], c)));
+    }
+  }
+}
+
+BOOST_AUTO_TEST_CASE_TEMPLATE(rel_genfloat_binary, T,
+                              rel_test_genfloats) {
+
+  constexpr int D = vector_length_v<T>;
+  using DT = vector_elem_t<T>;
+
+  namespace s = sycl;
+
+  using OutType = s::detail::builtin_input_boollike_t<T>;
+  using BoolType = s::detail::builtin_input_element_t<OutType>;
+
+  constexpr int FUN_COUNT = 9;
+
+  // build inputs and allocate outputs
+
+  s::queue queue;
+  if constexpr(std::is_same_v<DT, double>) {
+    if (!queue.get_device().has(sycl::aspect::fp64)) {
+      BOOST_TEST_MESSAGE("Skipping test for double since device has no fp64 support");
+      return;
+    }
+  }
+  s::buffer<T> in1{{1}};
+  s::buffer<T> in2{{1}};
+  s::buffer<OutType> out{{FUN_COUNT}};
+  {
+    auto inputs1  = in1.get_host_access();
+	auto inputs2  = in2.get_host_access();
+    auto outputs = out.get_host_access();
+    s::vec<DT, 16> v1{
+      DT(1.0), DT(1.0), DT(2.0), std::numeric_limits<DT>::quiet_NaN(),
+      DT(1.0), DT(0.0), std::numeric_limits<DT>::infinity(),
+      -std::numeric_limits<DT>::infinity(), DT(0.0), /*std::numeric_limits<DT>::denorm_min()*/ /* metal: denorm == 0 => true, temporary disable input */
+      DT(-1.0), DT(17.0), DT(-4.0), DT(-2.0), DT(3.0), DT(5.0), DT(-0.0)
+    };
+    s::vec<DT, 16> v2{
+      DT(1.0), DT(2.0), DT(1.0), DT(1.0),
+      std::numeric_limits<DT>::quiet_NaN(), DT(-0.0), std::numeric_limits<DT>::infinity(),
+      std::numeric_limits<DT>::infinity(), DT(0.0),
+      DT(-4.0), DT(17.0), DT(-1.0), DT(3.0), DT(-2.0), DT(5.0), DT(0.0)
+    };
+    inputs1[0] = get_subvector<DT, D>(v1);
+	inputs2[0] = get_subvector<DT, D>(v2);
+    for(int i = 0; i < FUN_COUNT; ++i) {
+      outputs[i] = OutType{BoolType{0}};
+    }
+  }
+
+  // run functions
+
+  queue.submit([&](s::handler &cgh) {
+    auto inputs1  = in1.template get_access<s::access::mode::read>(cgh);
+	auto inputs2  = in2.template get_access<s::access::mode::read>(cgh);
+    auto outputs = out.template get_access<s::access::mode::write>(cgh);
+    cgh.single_task<kernel_name<class rel_binary, D, DT>>([=]() {
+      int i = 0;
+      outputs[i++] = s::isequal(inputs1[0], inputs2[0]);
+	  outputs[i++] = s::isnotequal(inputs1[0], inputs2[0]);
+      outputs[i++] = s::isgreater(inputs1[0], inputs2[0]);
+      outputs[i++] = s::isgreaterequal(inputs1[0], inputs2[0]);
+	  outputs[i++] = s::isless(inputs1[0], inputs2[0]);
+      outputs[i++] = s::islessequal(inputs1[0], inputs2[0]);
+	  outputs[i++] = s::islessgreater(inputs1[0], inputs2[0]);
+	  outputs[i++] = s::isordered(inputs1[0], inputs2[0]);
+	  outputs[i++] = s::isunordered(inputs1[0], inputs2[0]);
+    });
+  });
+
+  // check results
+  auto host_isequal = [](DT a, DT b) {
+    return !std::isnan(a) && !std::isnan(b) && (a == b);
+  };
+  auto host_isnotequal = [](DT a, DT b) {
+    return std::isnan(a) || std::isnan(b) || (a != b);
+  };
+  auto host_isgreater = [](DT a, DT b) {
+    return !std::isnan(a) && !std::isnan(b) && (a > b);
+  };
+  auto host_isgreaterequal = [](DT a, DT b) {
+    return !std::isnan(a) && !std::isnan(b) && (a >= b);
+  };
+  auto host_isless = [](DT a, DT b) {
+    return !std::isnan(a) && !std::isnan(b) && (a < b);
+  };
+  auto host_islessequal = [](DT a, DT b) {
+    return !std::isnan(a) && !std::isnan(b) && (a <= b);
+  };
+  auto host_islessgreater = [](DT a, DT b) {
+    return !std::isnan(a) && !std::isnan(b) && ((a < b) || (a > b));
+  };
+  auto host_isordered = [](DT a, DT b) {
+    return !std::isnan(a) && (a == a) && !std::isnan(b) && (b == b);
+  };
+  auto host_isunordered = [](DT a, DT b) {
+    return std::isnan(a) || std::isnan(b);
+  };
+  auto postprocess = [](bool a) {
+    if constexpr (std::is_scalar_v<T> || std::is_same_v<T, sycl::marray<DT, D>>)
+      return a;
+    else
+      return a ? -1 : 0;
+  };
+      
+  {
+    auto inputs1  = in1.get_host_access();
+    auto inputs2  = in2.get_host_access();    
+    auto outputs = out.get_host_access();
+
+    for(int c = 0; c < std::max(D,1); ++c) {
+      int i = 0;
+      BOOST_TEST(comp(outputs[i++], c) == postprocess(host_isequal(comp(inputs1[0], c), comp(inputs2[0], c))));
+      BOOST_TEST(comp(outputs[i++], c) == postprocess(host_isnotequal(comp(inputs1[0], c), comp(inputs2[0], c))));
+      BOOST_TEST(comp(outputs[i++], c) == postprocess(host_isgreater(comp(inputs1[0], c), comp(inputs2[0], c))));
+      BOOST_TEST(comp(outputs[i++], c) == postprocess(host_isgreaterequal(comp(inputs1[0], c), comp(inputs2[0], c))));
+      BOOST_TEST(comp(outputs[i++], c) == postprocess(host_isless(comp(inputs1[0], c), comp(inputs2[0], c))));
+      BOOST_TEST(comp(outputs[i++], c) == postprocess(host_islessequal(comp(inputs1[0], c), comp(inputs2[0], c))));
+      BOOST_TEST(comp(outputs[i++], c) == postprocess(host_islessgreater(comp(inputs1[0], c), comp(inputs2[0], c))));
+      BOOST_TEST(comp(outputs[i++], c) == postprocess(host_isordered(comp(inputs1[0], c), comp(inputs2[0], c))));
+      BOOST_TEST(comp(outputs[i++], c) == postprocess(host_isunordered(comp(inputs1[0], c), comp(inputs2[0], c))));
     }
   }
 }

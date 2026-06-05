@@ -412,8 +412,8 @@ ze_queue::get_enqueued_event_handles() const {
   if(!wait_events.empty()) {
     evts.reserve(wait_events.size());
     for(std::size_t i = 0; i < wait_events.size(); ++i) {
-      evts[i] = static_cast<ze_node_event *>(wait_events[i].get())
-                    ->get_event_handle();
+      evts.emplace_back(static_cast<ze_node_event *>(wait_events[i].get())
+                    ->get_event_handle());
     }
   }
   return evts;
@@ -426,11 +426,11 @@ void ze_queue::register_submitted_op(std::shared_ptr<dag_node_event> evt) {
 }
 
 result ze_queue::submit_sscp_kernel_from_code_object(
-    const kernel_operation &op, hcf_object_id hcf_object,
-    std::string_view kernel_name, const rt::hcf_kernel_info *kernel_info,
-    const rt::range<3> &num_groups, const rt::range<3> &group_size,
-    unsigned local_mem_size, void **args, std::size_t *arg_sizes,
-    std::size_t num_args, const kernel_configuration &initial_config) {
+    hcf_object_id hcf_object, std::string_view kernel_name,
+    const rt::hcf_kernel_info *kernel_info, const rt::range<3> &num_groups,
+    const rt::range<3> &group_size, unsigned local_mem_size, void **args,
+    std::size_t *arg_sizes, std::size_t num_args,
+    const kernel_configuration &initial_config) {
 
 #ifdef HIPSYCL_WITH_SSCP_COMPILER
 
@@ -480,6 +480,8 @@ result ze_queue::submit_sscp_kernel_from_code_object(
       local_mem_size);
   _config.set_build_flag(
       kernel_build_flag::spirv_enable_intel_llvm_spirv_options);
+  _config.set_build_flag(
+      kernel_build_flag::spirv_enable_pointer_wrapping);
 
   auto binary_configuration_id = adaptivity_engine.finalize_binary_configuration(_config);
   auto code_object_configuration_id = binary_configuration_id;
@@ -502,15 +504,11 @@ result ze_queue::submit_sscp_kernel_from_code_object(
       std::move(compiler::createLLVMToSpirvTranslator(kernel_names));
     
     // Lower kernels to SPIR-V
-    rt::result err;
-    if(kernel_names.size() == 1) {
-      err = glue::jit::dead_argument_elimination::compile_kernel(
-          translator.get(), hcf_object, selected_image_name, _config,
-          binary_configuration_id, _reflection_map, compiled_image);
-    } else {
-      err = glue::jit::compile(translator.get(),
-        hcf_object, selected_image_name, _config, _reflection_map, compiled_image);
-    }
+    bool enable_dead_arg_elimination = kernel_names.size() == 1;
+    rt::result err = glue::jit::compile_and_store_stats(
+        translator.get(), hcf_object, selected_image_name, _config,
+        binary_configuration_id, _reflection_map, compiled_image,
+        enable_dead_arg_elimination);
     
     if(!err.is_success()) {
       register_error(err);
@@ -536,10 +534,9 @@ result ze_queue::submit_sscp_kernel_from_code_object(
     std::vector<std::string> kernel_names;
     adaptivity_engine.select_image_and_kernels(&kernel_names);
 
-    if(kernel_names.size() == 1)
-      exec_obj->get_jit_output_metadata().kernel_retained_arguments_indices =
-          glue::jit::dead_argument_elimination::
-              retrieve_retained_arguments_mask(binary_configuration_id);
+    bool has_dead_arg_elimination = kernel_names.size() == 1;
+    glue::jit::load_jit_output_metadata(*exec_obj, has_dead_arg_elimination,
+                                        binary_configuration_id);
 
     return exec_obj;
   };
@@ -585,6 +582,7 @@ result ze_queue::submit_sscp_kernel_from_code_object(
     return submission_err;
 
   register_submitted_op(completion_evt);
+  on_kernel_launch_complete(kernel_name, obj);
 
   return make_success();
 #else

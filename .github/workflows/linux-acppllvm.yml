@@ -1,0 +1,129 @@
+name: AdaptiveCpp-LLVM
+
+on: 
+  push:
+  pull_request:
+  
+jobs:
+  prep-container:
+    name: Prepare CI container clang ${{ matrix.clang }}, ${{ matrix.os }}, ${{ matrix.cuda_or_rocm }}
+    runs-on: ubuntu-22.04
+    permissions:
+      pull-requests: read
+      packages: write
+      actions: read
+    outputs:
+      docker_matrix: ${{ steps.matrix-output.outputs.json }}
+    strategy:
+      matrix:
+        clang: ['17']
+        cuda_or_rocm: ['cuda', 'rocm']
+        cuda: ['11']
+        rocm_version: ['5.6.1']
+        os: [ubuntu-22.04]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+          fetch-depth: 20
+      - uses: ./.github/workflows/create-ci-docker
+        id: docker
+        with:
+          LLVM_VERSION: ${{ matrix.clang }}
+          ROCM_VERSION: ${{ matrix.cuda_or_rocm == 'rocm' && matrix.rocm_version || '' }}
+          CUDA_MAJOR_VERSION: ${{ matrix.cuda_or_rocm == 'cuda' && matrix.cuda || '' }}
+          BASE_TAG: ${{ matrix.os }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}    
+      - uses: beacon-biosignals/matrix-output@v1
+        id: matrix-output
+        with:
+          yaml: |
+            name: ${{ matrix.clang }}-${{ matrix.os }}
+            base_compiler: ${{ matrix.clang }}
+            os: ${{ matrix.os }}
+            cuda_or_rocm: ${{ matrix.cuda_or_rocm }}
+            image: ${{ steps.docker.outputs.docker_image }}
+
+  test-acpp-llvm:
+    name: AdaptiveCpp LLVM ${{ matrix.clang_version }} and ${{ matrix.docker.cuda_or_rocm }}
+    needs: prep-container
+    runs-on: ${{ matrix.docker.os }}
+    container:
+      image: ${{ matrix.docker.image }}
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      matrix:
+        docker: ${{fromJson(needs.prep-container.outputs.docker_matrix)}}
+        clang_version: ['18', '20']
+      fail-fast: false
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: 'recursive'
+        path: AdaptiveCpp
+    - name: ccache
+      uses: hendrikmuhs/ccache-action@v1.2
+      with:
+        key: ${{ github.job }}-${{matrix.clang_version}}-${{matrix.docker.cuda_or_rocm}}
+        restore-keys: |
+          ${{ github.job }}
+    - name: clone LLVM
+      run: |
+        git clone --recurse-submodules https://github.com/llvm/llvm-project --depth 1 --single-branch -b release/${{matrix.clang_version}}.x llvm
+    - name: configure build
+      if: ${{ matrix.docker.cuda_or_rocm == 'cuda' }}
+      run: |
+        echo "TARGETS_TO_BUILD=;NVPTX" >> $GITHUB_ENV
+        mkdir -p ${GITHUB_WORKSPACE}/install/lib/
+        cp /opt/cuda/lib64/stubs/libcuda.so ${GITHUB_WORKSPACE}/install/lib/libcuda.so
+        cp /opt/cuda/lib64/stubs/libcuda.so ${GITHUB_WORKSPACE}/install/lib/libcuda.so.1
+    - name: configure build
+      if: ${{ matrix.docker.cuda_or_rocm == 'rocm' }}
+      run: |
+        echo "TARGETS_TO_BUILD=;AMDGPU" >> $GITHUB_ENV
+    - name: build Adaptive Cpp
+      run: |
+        mkdir build && cd build
+        cmake ../llvm/llvm -GNinja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=${GITHUB_WORKSPACE}/install -DLLVM_TARGETS_TO_BUILD="X86;${TARGETS_TO_BUILD}" -DLLVM_ENABLE_PROJECTS="clang;openmp;lld" -DLLVM_PARALLEL_LINK_JOBS=1 -DLLVM_BUILD_LLVM_DYLIB=ON -DLLVM_LINK_LLVM_DYLIB=ON -DLLVM_CCACHE_BUILD=ON -DLLVM_EXTERNAL_PROJECTS=AdaptiveCpp -DLLVM_EXTERNAL_ADAPTIVECPP_SOURCE_DIR=`pwd`/../AdaptiveCpp -DLLVM_ADAPTIVECPP_LINK_INTO_TOOLS=ON -DWITH_OPENCL_BACKEND=OFF -DCUDA_TOOLKIT_ROOT_DIR=/opt/cuda -DROCM_PATH=/opt/rocm -DOPENMP_ENABLE_LIBOMPTARGET=OFF
+        ninja -j2 install
+
+        echo "CC=clang" >> $GITHUB_ENV
+        echo "CXX=clang++" >> $GITHUB_ENV
+        echo "PATH=${GITHUB_WORKSPACE}/install/bin:$PATH" >> $GITHUB_ENV
+        echo "LD_LIBRARY_PATH=${GITHUB_WORKSPACE}/install/lib:${GITHUB_WORKSPACE}/install/lib/x86_64-unknown-linux-gnu:$LD_LIBRARY_PATH" >> $GITHUB_ENV
+    - name: build CPU tests
+      run: |
+        mkdir ${GITHUB_WORKSPACE}/build/tests-cpu
+        cd ${GITHUB_WORKSPACE}/build/tests-cpu
+        cmake -GNinja -DACPP_TARGETS="omp" -DAdaptiveCpp_DIR=${GITHUB_WORKSPACE}/install/lib/cmake/AdaptiveCpp ${GITHUB_WORKSPACE}/AdaptiveCpp/tests -DLLVM_DIR=${GITHUB_WORKSPACE}/install/lib/cmake/llvm
+        ninja -j2
+    - name: build generic SSCP tests
+      run: |
+        mkdir ${GITHUB_WORKSPACE}/build/tests-sscp
+        cd ${GITHUB_WORKSPACE}/build/tests-sscp
+        cmake -GNinja -DACPP_TARGETS="generic" -DAdaptiveCpp_DIR=${GITHUB_WORKSPACE}/install/lib/cmake/AdaptiveCpp ${GITHUB_WORKSPACE}/AdaptiveCpp/tests  -DLLVM_DIR=${GITHUB_WORKSPACE}/install/lib/cmake/llvm
+        ninja -j2
+    - name: build CUDA tests
+      if: ${{ matrix.docker.cuda_or_rocm == 'cuda' }}
+      run: |
+        mkdir ${GITHUB_WORKSPACE}/build/tests-cuda
+        cd ${GITHUB_WORKSPACE}/build/tests-cuda
+        cmake -GNinja -DACPP_TARGETS="cuda:sm_60" -DAdaptiveCpp_DIR=${GITHUB_WORKSPACE}/install/lib/cmake/AdaptiveCpp ${GITHUB_WORKSPACE}/AdaptiveCpp/tests  -DLLVM_DIR=${GITHUB_WORKSPACE}/install/lib/cmake/llvm
+        ninja -j2
+    - name: build ROCm tests
+      if: ${{ matrix.docker.cuda_or_rocm == 'rocm' }}
+      run: |
+        mkdir ${GITHUB_WORKSPACE}/build/tests-rocm
+        cd ${GITHUB_WORKSPACE}/build/tests-rocm
+        cmake -GNinja -DACPP_TARGETS="hip:gfx906" -DAdaptiveCpp_DIR=${GITHUB_WORKSPACE}/install/lib/cmake/AdaptiveCpp ${GITHUB_WORKSPACE}/AdaptiveCpp/tests -DLLVM_DIR=${GITHUB_WORKSPACE}/install/lib/cmake/llvm
+        ninja -j2
+    - name: run CPU tests
+      run: |
+        cd ${GITHUB_WORKSPACE}/build/tests-cpu
+        ./sycl_tests
+    - name: run SSCP CPU tests
+      run: |
+        cd ${GITHUB_WORKSPACE}/build/tests-sscp
+        ./sycl_tests

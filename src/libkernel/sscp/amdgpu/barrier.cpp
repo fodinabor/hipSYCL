@@ -92,3 +92,9 @@ __acpp_sscp_sub_group_barrier(__acpp_sscp_memory_scope fence_scope,
 
   __acpp_amdgpu_mem_fence(fence_scope, order);
 }
+
+HIPSYCL_SSCP_BUILTIN
+void __acpp_sscp_memory_fence(__acpp_sscp_memory_scope scope,
+                              __acpp_sscp_memory_order order) {
+  __acpp_amdgpu_mem_fence(scope, order);
+}

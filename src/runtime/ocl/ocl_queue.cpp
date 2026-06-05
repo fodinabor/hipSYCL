@@ -28,6 +28,7 @@
 #include "hipSYCL/compiler/llvm-to-backend/spirv/LLVMToSpirvFactory.hpp"
 #include "hipSYCL/glue/llvm-sscp/jit.hpp"
 #include <CL/cl.h>
+#include <CL/cl_ext.h>
 
 #endif
 
@@ -45,15 +46,41 @@ result submit_ocl_kernel(cl::Kernel& kernel,
                         const std::size_t *arg_sizes, std::size_t num_args,
                         ocl_usm* usm,
                         const hcf_kernel_info *info,
+                        const std::optional<std::vector<int>>& dae_retained_arguments_mask,
                         cl::Event* evt_out = nullptr) {
 
+  // We assume that if this returns true, then the JIT compiler was configured
+  // to not wrap pointers, so that we can pass them directly.
+  bool can_submit_arbitrary_pointer_arguments =
+      usm->accepts_arbitrary_pointer_kernel_arguments();
+
   cl_int err = 0;
+
   for(std::size_t i = 0; i < num_args; ++i ){
     HIPSYCL_DEBUG_INFO << "ocl_queue: Setting kernel argument " << i
                        << " of size " << arg_sizes[i] << " at " << kernel_args[i]
                        << std::endl;
 
-    err = kernel.setArg(i, static_cast<std::size_t>(arg_sizes[i]), kernel_args[i]);
+    std::size_t original_index = i;
+    if(dae_retained_arguments_mask.has_value()) {
+      original_index = dae_retained_arguments_mask.value()[i];
+    }
+    
+    if (can_submit_arbitrary_pointer_arguments &&
+        info->get_argument_type(original_index) ==
+            hcf_kernel_info::argument_type::pointer) {
+
+      const void* arg_location = kernel_args[i];
+      void* ptr;
+      std::memcpy(&ptr, arg_location, sizeof(void*));
+      
+      err = usm->set_kernel_pointer_arg(kernel, static_cast<unsigned>(i), ptr);
+    } else {
+      // If we don't have arbitrary pointer argument support, the JIT compiler
+      // should have been configured to wrap pointers, so that we can always
+      // safely execute this branch.
+      err = kernel.setArg(i, static_cast<std::size_t>(arg_sizes[i]), kernel_args[i]);
+    }
 
     if(err != CL_SUCCESS) {
       return make_error(
@@ -108,18 +135,39 @@ result submit_ocl_kernel(cl::Kernel& kernel,
 
 class ocl_hardware_manager;
 
-ocl_queue::ocl_queue(ocl_hardware_manager* hw_manager, std::size_t device_index)
+ocl_queue::ocl_queue(ocl_hardware_manager* hw_manager, std::size_t device_index, int priority)
   : _hw_manager{hw_manager}, _device_index{device_index}, _sscp_invoker{this},
     _kernel_cache{kernel_cache::get()} {
 
-  cl_command_queue_properties props = 0;
   ocl_hardware_context *dev_ctx =
       static_cast<ocl_hardware_context *>(hw_manager->get_device(device_index));
   cl::Device cl_dev = dev_ctx->get_cl_device();
   cl::Context cl_ctx = dev_ctx->get_cl_context();
 
+  this->_api_accepts_arbirary_pointers =
+      dev_ctx->get_usm_provider()->accepts_arbitrary_pointer_kernel_arguments();
+
   cl_int err;
-  _queue = cl::CommandQueue{cl_ctx, cl_dev, props, &err};
+  if(priority != 0 && dev_ctx->has_cl_khr_priority_hints_extension()) {
+#ifdef CL_QUEUE_PRIORITY_KHR
+    cl_queue_properties clPriority = (priority < 0) ? CL_QUEUE_PRIORITY_HIGH_KHR : CL_QUEUE_PRIORITY_LOW_KHR;
+    cl_queue_properties props[] = {
+      CL_QUEUE_PRIORITY_KHR, clPriority,
+      0
+    };
+    cl_command_queue rawQueue = clCreateCommandQueueWithProperties(cl_ctx(), cl_dev(), props, &err);
+    _queue = cl::CommandQueue(rawQueue);
+#else
+    print_warning(__acpp_here(),
+              error_info{"ocl_queue: Cannot set queue priority, "
+                         "AdaptiveCpp was built with OpenCL headers that don't recognize CL_QUEUE_PRIORITY_KHR"});
+    cl_command_queue_properties props = 0;
+    _queue = cl::CommandQueue{cl_ctx, cl_dev, props, &err};
+#endif
+  } else {
+    cl_command_queue_properties props = 0;
+    _queue = cl::CommandQueue{cl_ctx, cl_dev, props, &err};
+  }
   if(err != CL_SUCCESS) {
     register_error(__acpp_here(),
                    error_info{"ocl_queue: Couldn't construct backend queue",
@@ -431,11 +479,11 @@ ocl_hardware_manager *ocl_queue::get_hardware_manager() const {
 }
 
 result ocl_queue::submit_sscp_kernel_from_code_object(
-    const kernel_operation &op, hcf_object_id hcf_object,
-    std::string_view kernel_name, const rt::hcf_kernel_info *kernel_info,
-    const rt::range<3> &num_groups, const rt::range<3> &group_size,
-    unsigned local_mem_size, void **args, std::size_t *arg_sizes,
-    std::size_t num_args, const kernel_configuration &initial_config) {
+    hcf_object_id hcf_object, std::string_view kernel_name,
+    const rt::hcf_kernel_info *kernel_info, const rt::range<3> &num_groups,
+    const rt::range<3> &group_size, unsigned local_mem_size, void **args,
+    std::size_t *arg_sizes, std::size_t num_args,
+    const kernel_configuration &initial_config) {
 
 #ifdef HIPSYCL_WITH_SSCP_COMPILER
 
@@ -494,7 +542,9 @@ result ocl_queue::submit_sscp_kernel_from_code_object(
   // with OpenCL implementations that are not from Intel.
   _config.set_build_flag(
     kernel_build_flag::spirv_enable_intel_llvm_spirv_options);
-
+  if(!this->_api_accepts_arbirary_pointers) {
+    _config.set_build_flag(kernel_build_flag::spirv_enable_pointer_wrapping);
+  }
 
   // TODO: Enable this if we are on Intel
   // config.set_build_flag(kernel_build_flag::spirv_enable_intel_llvm_spirv_options);
@@ -522,16 +572,11 @@ result ocl_queue::submit_sscp_kernel_from_code_object(
       std::move(compiler::createLLVMToSpirvTranslator(kernel_names));
     
     // Lower kernels to SPIR-V
-    rt::result err;
-    if(kernel_names.size() == 1) {
-      err = glue::jit::dead_argument_elimination::compile_kernel(
-          translator.get(), hcf_object, selected_image_name, _config,
-          binary_configuration_id, _reflection_map, compiled_image);
-    } else {
-      err =
-          glue::jit::compile(translator.get(), hcf_object, selected_image_name,
-                             _config, _reflection_map, compiled_image);
-    }
+    bool enable_dead_arg_elimination = kernel_names.size() == 1;
+    rt::result err = glue::jit::compile_and_store_stats(
+        translator.get(), hcf_object, selected_image_name, _config,
+        binary_configuration_id, _reflection_map, compiled_image,
+        enable_dead_arg_elimination);
     
     if(!err.is_success()) {
       register_error(err);
@@ -551,11 +596,10 @@ result ocl_queue::submit_sscp_kernel_from_code_object(
       return nullptr;
     }
 
-    if(exec_obj->supported_backend_kernel_names().size() == 1)
-      exec_obj->get_jit_output_metadata().kernel_retained_arguments_indices =
-          glue::jit::dead_argument_elimination::
-              retrieve_retained_arguments_mask(binary_configuration_id);
-
+    bool has_dead_arg_elimination =
+        exec_obj->supported_backend_kernel_names().size() == 1;
+    glue::jit::load_jit_output_metadata(*exec_obj, has_dead_arg_elimination,
+                                        binary_configuration_id);
 
     return exec_obj;
   };
@@ -591,12 +635,14 @@ result ocl_queue::submit_sscp_kernel_from_code_object(
       kernel, _queue, group_size, num_groups, _arg_mapper.get_mapped_args(),
       const_cast<std::size_t *>(_arg_mapper.get_mapped_arg_sizes()),
       _arg_mapper.get_mapped_num_args(), hw_ctx->get_usm_provider(), kernel_info,
+      obj->get_jit_output_metadata().kernel_retained_arguments_indices,
       &completion_evt);
 
   if(!submission_err.is_success())
     return submission_err;
 
   register_submitted_op(completion_evt);
+  on_kernel_launch_complete(kernel_name, obj);
 
   return make_success();
 #else

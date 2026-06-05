@@ -596,6 +596,16 @@ __acpp_atomic_fetch_max(double *addr, double x, memory_order order,
       addr, old, x, order, order, scope));
   return x;
 }
+
+HIPSYCL_BUILTIN void __acpp_atomic_fence(memory_order order, memory_scope scope){
+  if(scope == memory_scope::system)
+    __threadfence_system();
+  else if (scope == memory_scope::device)
+    __threadfence();
+  else if (scope == memory_scope::work_group)
+    __threadfence_block();
+} 
+
 }
 }
 }

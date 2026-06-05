@@ -222,10 +222,6 @@ VectorShape VectorShapeTransformer::computeIdealShapeForInst(const Instruction &
       return VectorShape::varying(); // calling a non-function
     }
 
-    if (callee->getName().contains("rv_is_uniform")) {
-      return getObservedShape(BB, *call.getOperand(0));
-    }
-
     // memcpy shape is uniform if src ptr shape is uniform
     // TODO re-factor into resolver
     Intrinsic::ID id = callee->getIntrinsicID();

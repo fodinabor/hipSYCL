@@ -14,9 +14,9 @@ HIPSYCL_SSCP_CONVERGENT_BUILTIN void
 __acpp_sscp_work_group_barrier(__acpp_sscp_memory_scope fence_scope,
                                __acpp_sscp_memory_order) {
 
-  if(fence_scope == hipsycl::sycl::memory_scope::system) {
+  if(fence_scope == __acpp_sscp_memory_scope::system) {
     __nvvm_membar_sys();
-  } else if(fence_scope == hipsycl::sycl::memory_scope::device) {
+  } else if(fence_scope == __acpp_sscp_memory_scope::device) {
     __nvvm_membar_gl();
   }
   // syncthreads is already a clang builtin
@@ -27,11 +27,11 @@ HIPSYCL_SSCP_CONVERGENT_BUILTIN void
 __acpp_sscp_sub_group_barrier(__acpp_sscp_memory_scope fence_scope,
                               __acpp_sscp_memory_order) {
 
-  if(fence_scope == hipsycl::sycl::memory_scope::system) {
+  if(fence_scope == __acpp_sscp_memory_scope::system) {
     __nvvm_membar_sys();
-  } else if(fence_scope == hipsycl::sycl::memory_scope::device) {
+  } else if(fence_scope == __acpp_sscp_memory_scope::device) {
     __nvvm_membar_gl();
-  } else if(fence_scope == hipsycl::sycl::memory_scope::work_group) {
+  } else if(fence_scope == __acpp_sscp_memory_scope::work_group) {
     __nvvm_membar_cta();
   }
   // We cannot call __nvvm_bar_warp_sync(-1) since this builtin
@@ -40,3 +40,16 @@ __acpp_sscp_sub_group_barrier(__acpp_sscp_memory_scope fence_scope,
   // TODO: Disable this line if ptx < 60
   asm("bar.warp.sync -1;");
 }
+
+HIPSYCL_SSCP_BUILTIN
+void __acpp_sscp_memory_fence(__acpp_sscp_memory_scope scope,
+                              __acpp_sscp_memory_order order) {
+  if (scope == __acpp_sscp_memory_scope::system) {
+    __nvvm_membar_sys();
+  } else if (scope == __acpp_sscp_memory_scope::device) {
+    __nvvm_membar_gl();
+  } else if (scope == __acpp_sscp_memory_scope::work_group) {
+    __nvvm_membar_cta();
+  }
+}
+

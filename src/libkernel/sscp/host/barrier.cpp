@@ -9,6 +9,7 @@
  */
 // SPDX-License-Identifier: BSD-2-Clause
 #include "hipSYCL/sycl/libkernel/sscp/builtins/barrier.hpp"
+#include "hipSYCL/sycl/libkernel/sscp/builtins/builtin_config.hpp"
 
 extern "C" [[clang::convergent]] void __acpp_cbs_barrier();
 extern "C" [[clang::convergent]] void __acpp_cbs_sub_barrier();
@@ -33,8 +34,24 @@ __acpp_sscp_work_group_barrier(__acpp_sscp_memory_scope fence_scope,
 HIPSYCL_SSCP_CONVERGENT_BUILTIN void
 __acpp_sscp_sub_group_barrier(__acpp_sscp_memory_scope fence_scope,
                               __acpp_sscp_memory_order order) {
-#if !USE_RV
   __acpp_cbs_sub_barrier();
-#endif
   __acpp_cpu_mem_fence(fence_scope, order);
+}
+
+
+HIPSYCL_SSCP_BUILTIN
+void __acpp_sscp_memory_fence(__acpp_sscp_memory_scope scope,
+                              __acpp_sscp_memory_order order) {
+  int fence_order = __ATOMIC_RELAXED;
+
+  if(order == __acpp_sscp_memory_order::acq_rel)
+    fence_order = __ATOMIC_ACQ_REL;
+  else if(order == __acpp_sscp_memory_order::acquire)
+    fence_order = __ATOMIC_ACQUIRE;
+  else if(order == __acpp_sscp_memory_order::release)
+    fence_order = __ATOMIC_RELEASE;
+  else if(order == __acpp_sscp_memory_order::seq_cst)
+    fence_order = __ATOMIC_SEQ_CST;
+
+  __atomic_thread_fence(fence_order);
 }

@@ -1,6 +1,7 @@
 #include "hipSYCL/compiler/cbs/CBSIntrinsics.hpp"
 
 #include "hipSYCL/compiler/cbs/SubCfgFormation.hpp"
+#include "hipSYCL/cbs_config.hpp"
 
 #include <llvm/IR/Function.h>
 #include <llvm/IR/Instruction.h>

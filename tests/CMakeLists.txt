@@ -89,6 +89,7 @@ add_executable(sycl_tests
   sycl/fill.cpp
   sycl/group_functions/group_functions_misc.cpp
   sycl/group_functions/group_functions_binary_reduce.cpp
+  sycl/group_functions/group_functions_known_identity.cpp
   sycl/group_functions/group_functions_reduce.cpp
   sycl/group_functions/group_functions_scan.cpp
   sycl/half.cpp
@@ -114,6 +115,17 @@ add_executable(sycl_tests
 # Also test instant submission mode
 target_compile_definitions(sycl_tests PRIVATE -DACPP_ALLOW_INSTANT_SUBMISSION=1)
 target_include_directories(sycl_tests PRIVATE ${Boost_INCLUDE_DIRS} ${CMAKE_CURRENT_SOURCE_DIR} ${OpenMP_CXX_INCLUDE_DIRS})
+
+#Check if numa is available
+find_path( NUMA_INCLUDE_DIR NAMES numa.h)
+find_library( NUMA_LIBRARY NAMES numa)
+
+if( NUMA_INCLUDE_DIR AND NUMA_LIBRARY)
+  target_compile_definitions(sycl_tests PRIVATE -DLIB_NUMA_AVAILABLE)
+  target_link_libraries(sycl_tests PRIVATE ${NUMA_LIBRARY})
+  target_include_directories(sycl_tests PRIVATE ${NUMA_INCLUDE_DIR})
+endif()
+
 add_sycl_to_target(TARGET sycl_tests)
 
 add_executable(rt_tests 
@@ -138,22 +150,42 @@ if(WITH_PSTL_TESTS)
     pstl/copy.cpp
     pstl/copy_if.cpp
     pstl/copy_n.cpp
+    pstl/count.cpp
+    pstl/count_if.cpp
+    pstl/equal.cpp
     pstl/exclusive_scan.cpp
     pstl/fill.cpp
     pstl/fill_n.cpp
+    pstl/find.cpp
+    pstl/find_if.cpp
+    pstl/find_if_not.cpp
+    pstl/find_end.cpp
+    pstl/find_first_of.cpp
     pstl/for_each.cpp
     pstl/for_each_n.cpp
     pstl/generate.cpp
     pstl/generate_n.cpp
     pstl/inclusive_scan.cpp
+    pstl/is_sorted_until.cpp
+    pstl/is_sorted.cpp
     pstl/memory.cpp
     pstl/merge.cpp
+    pstl/mismatch.cpp
+    pstl/min_element.cpp
+    pstl/max_element.cpp
+    pstl/move.cpp
     pstl/none_of.cpp
     pstl/reduce.cpp
+    pstl/remove_copy.cpp
+    pstl/remove_copy_if.cpp
+    pstl/remove.cpp
+    pstl/remove_if.cpp
     pstl/replace.cpp
     pstl/replace_if.cpp
     pstl/replace_copy.cpp
     pstl/replace_copy_if.cpp
+    pstl/reverse_copy.cpp
+    pstl/reverse.cpp
     pstl/sort.cpp
     pstl/transform.cpp
     pstl/transform_reduce.cpp
@@ -171,6 +203,24 @@ if(WITH_PSTL_TESTS)
   target_include_directories(pstl_tests PRIVATE ${Boost_INCLUDE_DIRS} ${CMAKE_CURRENT_SOURCE_DIR} ${OpenMP_CXX_INCLUDE_DIRS})
   target_link_libraries(pstl_tests PRIVATE Threads::Threads -ltbb)
   add_sycl_to_target(TARGET pstl_tests)
+endif()
+
+# PCUDA only works with --acpp-targets=generic, so it needs to be optional
+if(WITH_PCUDA_TESTS)
+  add_executable(pcuda_tests 
+    pcuda/pcuda_test_suite.cpp
+    pcuda/device_query.cpp
+    pcuda/memory.cpp
+    pcuda/stream.cpp
+    pcuda/event.cpp
+    pcuda/atomic.cpp
+    pcuda/interop.cpp
+  )
+
+  target_compile_options(pcuda_tests PRIVATE --acpp-pcuda)
+  target_include_directories(pcuda_tests PRIVATE ${Boost_INCLUDE_DIRS} ${CMAKE_CURRENT_SOURCE_DIR} ${OpenMP_CXX_INCLUDE_DIRS})
+  target_link_libraries(pcuda_tests PRIVATE Threads::Threads)
+  add_sycl_to_target(TARGET pcuda_tests)
 endif()
 
 add_subdirectory(compiler)

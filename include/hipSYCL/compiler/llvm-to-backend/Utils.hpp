@@ -12,9 +12,13 @@
 #define HIPSYCL_LLVM_TO_BACKEND_UTILS_HPP
 
 #include <atomic>
+#include <optional>
+#include <sstream>
+#include <array>
 
 #include "hipSYCL/compiler/llvm-to-backend/LLVMToBackend.hpp"
 #include "hipSYCL/common/debug.hpp"
+#include "hipSYCL/common/filesystem.hpp"
 #include <llvm/ADT/DenseMap.h>
 #include <llvm/IR/Attributes.h>
 #include <llvm/ADT/SmallSet.h>
@@ -34,7 +38,10 @@
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Passes/PassBuilder.h>
-#include "hipSYCL/RV.h"
+
+#if LLVM_VERSION_MAJOR < 16
+#include <llvm/ADT/Optional.h>
+#endif
 
 namespace hipsycl {
 namespace compiler {
@@ -96,12 +103,6 @@ inline auto withPassBuilderAndMAM(F&& handler) {
   // If we use RV, then we can not optimize to much
   // E.g., no loop unrolling or interleaving
   // (Do not change the numer of iterations of the loop)
-#if USE_RV
-  TuningOptions.LoopUnrolling = false;
-  TuningOptions.LoopInterleaving = false;
-  TuningOptions.LoopVectorization = false;
-  TuningOptions.SLPVectorization = false;
-#endif
 
   llvm::PassBuilder PB{nullptr, TuningOptions};
   PB.registerModuleAnalyses(MAM);
@@ -355,6 +356,114 @@ private:
   llvm::SmallDenseMap<llvm::Type*, llvm::Type*> PointerWrapperTypes;
 };
 
+template<class T>
+std::optional<T> getEnvironmentVariable(const std::string& Name) {
+  std::string EnvName = Name;
+  std::transform(EnvName.begin(), EnvName.end(), EnvName.begin(), ::toupper);
+
+  if(const char* EnvVal = std::getenv(("ACPP_S2_"+EnvName).c_str())) {
+    T val;
+    std::stringstream sstr{std::string{EnvVal}};
+    sstr >> val;
+    if (!sstr.fail() && !sstr.bad()) {
+      return val;
+    }
+  }
+  return {};
+}
+
+template<class T>
+T getEnvironmentVariableOrDefault(const std::string& Name,
+                                      const T& Default) {
+  std::optional<T> v = getEnvironmentVariable<T>(Name);
+  if(v.has_value()) {
+    return v.value();
+  }
+  return Default;
+}
+
+std::string getClangPath();
+std::string getLLCPath();
+std::string getLLDPath();
+std::string getOptPath();
+std::string getLibSvmlDir();
+std::string getLibSleefDir();
+std::string getLibAmathDir();
+std::string getLibMvecDir();
+std::string getBitcodePath();
+std::string getRedistPackageBitcodePath(const std::string& backend);
+
+#if LLVM_VERSION_MAJOR >= 16
+int executeAndWait(
+    llvm::StringRef Program,
+    llvm::ArrayRef<llvm::StringRef> Args,
+    std::optional<llvm::ArrayRef<llvm::StringRef>> Env = std::nullopt,
+    llvm::ArrayRef<std::optional<llvm::StringRef>> Redirects = {});
+#else
+int executeAndWait(
+    llvm::StringRef Program,
+    llvm::ArrayRef<llvm::StringRef> Args,
+    llvm::Optional<llvm::ArrayRef<llvm::StringRef>> Env = llvm::None,
+    llvm::ArrayRef<llvm::Optional<llvm::StringRef>> Redirects = {});
+#endif
+
+// Some backends do not correctly lower LLVM intrinsics;
+// this function replaces them with acpp builtins.
+// This should be done before linking in AdaptiveCpp builtin
+// bitcode libraries.
+template <int N>
+inline void replaceLLVMIntrinsicsWithAcppBuiltins(
+    llvm::Module &M, const std::array<std::array<const char *, 2>, N> &IntrinsicReplacementMap) {
+  
+  for(auto& RM : IntrinsicReplacementMap) {
+    if(auto* F = M.getFunction(RM[0])) {
+      llvm::Function* Replacement = M.getFunction(RM[1]);
+
+      if(!Replacement) {
+        Replacement = llvm::Function::Create(F->getFunctionType(),
+                                             llvm::GlobalValue::ExternalLinkage, RM[1], M);
+        F->replaceAllUsesWith(Replacement);
+      }
+    }
+  }
+}
+
+inline void replaceLLVMIntrinsicsWithAcppBuiltins(llvm::Module& M) {
+  using IntrinsicMapping = std::array<const char*, 2>;
+  static constexpr std::array IntrinsicReplacementMap = {
+    IntrinsicMapping{"llvm.pow.f32", "__acpp_sscp_pow_f32"},
+    IntrinsicMapping{"llvm.pow.f64", "__acpp_sscp_pow_f64"},
+    IntrinsicMapping{"llvm.exp.f32", "__acpp_sscp_exp_f32"},
+    IntrinsicMapping{"llvm.exp.f64", "__acpp_sscp_exp_f64"},
+    IntrinsicMapping{"llvm.exp2.f32", "__acpp_sscp_exp2_f32"},
+    IntrinsicMapping{"llvm.exp2.f64", "__acpp_sscp_exp2_f64"},
+    IntrinsicMapping{"llvm.exp10.f32", "__acpp_sscp_exp10_f32"},
+    IntrinsicMapping{"llvm.exp10.f64", "__acpp_sscp_exp10_f64"},
+    IntrinsicMapping{"llvm.cos.f32", "__acpp_sscp_cos_f32"},
+    IntrinsicMapping{"llvm.cos.f64", "__acpp_sscp_cos_f64"},
+    IntrinsicMapping{"llvm.sin.f32", "__acpp_sscp_sin_f32"},
+    IntrinsicMapping{"llvm.sin.f64", "__acpp_sscp_sin_f64"},
+    // tan not fine in LLVM 21
+    IntrinsicMapping{"llvm.tan.f32", "__acpp_sscp_tan_f32"},
+    IntrinsicMapping{"llvm.tan.f64", "__acpp_sscp_tan_f64"},
+    IntrinsicMapping{"llvm.log.f32", "__acpp_sscp_log_f32"},
+    IntrinsicMapping{"llvm.log.f64", "__acpp_sscp_log_f64"},
+    IntrinsicMapping{"llvm.log2.f32", "__acpp_sscp_log2_f32"},
+    IntrinsicMapping{"llvm.log2.f64", "__acpp_sscp_log2_f64"},
+    IntrinsicMapping{"llvm.log10.f32", "__acpp_sscp_log10_f32"},
+    IntrinsicMapping{"llvm.log10.f64", "__acpp_sscp_log10_f64"},
+    // asin and a cos not fine in LLVM 21
+    IntrinsicMapping{"llvm.asin.f32", "__acpp_sscp_asin_f32"},
+    IntrinsicMapping{"llvm.asin.f64", "__acpp_sscp_asin_f64"},
+    IntrinsicMapping{"llvm.acos.f32", "__acpp_sscp_acos_f32"},
+    IntrinsicMapping{"llvm.acos.f64", "__acpp_sscp_acos_f64"},
+    // atan at least with LLVM 20 needs remapping
+    IntrinsicMapping{"llvm.atan.f32", "__acpp_sscp_atan_f32"},
+    IntrinsicMapping{"llvm.atan.f64", "__acpp_sscp_atan_f64"}
+  };
+
+  replaceLLVMIntrinsicsWithAcppBuiltins<IntrinsicReplacementMap.size()>(M, IntrinsicReplacementMap);
+}
 
 }
 }

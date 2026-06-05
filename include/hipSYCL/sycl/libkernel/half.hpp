@@ -25,13 +25,21 @@
 namespace hipsycl {
 namespace sycl {
 
-class half;
-
 namespace detail {
-  constexpr half create_half(fp16::half_storage h);
-  constexpr fp16::half_storage get_half_storage(half h);
-}
 
+namespace half_impl {
+  class half;
+} // half_impl
+
+// We need this inline namespace so we can specify the friend function
+// and also so it gets visible in detail.
+inline namespace half_functions {
+  constexpr half_impl::half create_half(fp16::half_storage h);
+  constexpr fp16::half_storage get_half_storage(half_impl::half h);
+} // half_functions
+
+
+namespace half_impl {
 class half {
 private:
   friend constexpr half detail::create_half(fp16::half_storage h);
@@ -123,7 +131,7 @@ public:
   }
 
     // operator +,-,*,/ for combinations of half and other types
-#define OP_FOR_TYPE(op, type)                                         \
+#define ACPP_HALF_OP_FOR_TYPE(op, type)                               \
   friend half operator op(const half lhs, const type rhs) {           \
     return lhs op half(rhs);                                          \
   }                                                                   \
@@ -132,23 +140,23 @@ public:
     return half(lhs) op rhs;                                          \
   }
 
-#define OP(op)                                                        \
-  OP_FOR_TYPE(op, int)                                                \
-  OP_FOR_TYPE(op, unsigned int)                                       \
-  OP_FOR_TYPE(op, long)                                               \
-  OP_FOR_TYPE(op, long long)                                          \
-  OP_FOR_TYPE(op, unsigned long)                                      \
-  OP_FOR_TYPE(op, unsigned long long)                                 \
-  OP_FOR_TYPE(op, float)                                              \
-  OP_FOR_TYPE(op, double)
+#define ACPP_HALF_OP(op)                                              \
+  ACPP_HALF_OP_FOR_TYPE(op, int)                                      \
+  ACPP_HALF_OP_FOR_TYPE(op, unsigned int)                             \
+  ACPP_HALF_OP_FOR_TYPE(op, long)                                     \
+  ACPP_HALF_OP_FOR_TYPE(op, long long)                                \
+  ACPP_HALF_OP_FOR_TYPE(op, unsigned long)                            \
+  ACPP_HALF_OP_FOR_TYPE(op, unsigned long long)                       \
+  ACPP_HALF_OP_FOR_TYPE(op, float)                                    \
+  ACPP_HALF_OP_FOR_TYPE(op, double)
 
-  OP(+)
-  OP(-)
-  OP(*)
-  OP(/)
+  ACPP_HALF_OP(+)
+  ACPP_HALF_OP(-)
+  ACPP_HALF_OP(*)
+  ACPP_HALF_OP(/)
 
-#undef OP
-#undef OP_FOR_TYPE
+#undef ACPP_HALF_OP
+#undef ACPP_HALF_OP_FOR_TYPE
 
   friend bool operator==(const half& a, const half& b) noexcept {
     return a._data == b._data;
@@ -158,15 +166,38 @@ public:
     return a._data != b._data;
   }
 
-  // Operator is +/- unary
-  friend half& operator+(half& a) noexcept {
+  friend half& operator++(half& a) noexcept {
+    a += 1.f;
     return a;
   }
 
-  friend half& operator-(half& a) noexcept {
+  friend half operator++(half& a, int) noexcept {
+    half old = a;
+    a += 1.f;
+    return a;
+  }
+
+  friend half& operator--(half& a) noexcept {
+    a -= 1.f;
+    return a;
+  }
+
+  friend half operator--(half& a, int) noexcept {
+    half old = a;
+    a -= 1.f;
+    return a;
+  }
+
+  // Operator is +/- unary
+  friend half operator+(const half& a) noexcept {
+    return a;
+  }
+
+  friend half operator-(const half& a) noexcept {
     constexpr __acpp_uint16 sign_mask = 0x8000;
-    a._data ^= sign_mask;
-    return a; 
+    half ret{a};
+    ret._data ^= sign_mask;
+    return ret;
   }
 
   ACPP_UNIVERSAL_TARGET
@@ -204,23 +235,56 @@ public:
       return __hge(fp16::as_cuda_half(a._data), fp16::as_cuda_half(b._data)),
       return fp16::builtin_greater_than_equal(a._data, b._data))
   }
+
+#define ACPP_HALF_OP_FOR_TYPE(op, type)                               \
+  friend bool operator op(const half& a, const type& b) {             \
+    return static_cast<float>(a) op b;                                \
+  }                                                                   \
+                                                                      \
+  friend bool operator op(const type& a, const half& b) {             \
+    return a op static_cast<float>(b);                                \
+  }
+  
+#define ACPP_HALF_OP(op)                                              \
+  ACPP_HALF_OP_FOR_TYPE(op, int)                                      \
+  ACPP_HALF_OP_FOR_TYPE(op, unsigned int)                             \
+  ACPP_HALF_OP_FOR_TYPE(op, long)                                     \
+  ACPP_HALF_OP_FOR_TYPE(op, long long)                                \
+  ACPP_HALF_OP_FOR_TYPE(op, unsigned long)                            \
+  ACPP_HALF_OP_FOR_TYPE(op, unsigned long long)                       \
+  ACPP_HALF_OP_FOR_TYPE(op, float)                                    \
+  ACPP_HALF_OP_FOR_TYPE(op, double)
+
+  ACPP_HALF_OP(<)
+  ACPP_HALF_OP(<=)
+  ACPP_HALF_OP(>)
+  ACPP_HALF_OP(>=)
+  ACPP_HALF_OP(==)
+  ACPP_HALF_OP(!=)
+
+#undef ACPP_HALF_OP
+#undef ACPP_HALF_OP_FOR_TYPE
+
 private:
   fp16::half_storage _data;
 };
+} // half_impl
 
-namespace detail {
-  constexpr half create_half(fp16::half_storage h) {
-    half v;
-    v._data = h;
-    return v;
-  }
-  constexpr fp16::half_storage get_half_storage(half h) {
-    return h._data;
-  }
+inline namespace half_functions {
+constexpr half_impl::half create_half(fp16::half_storage h) {
+  half_impl::half v;
+  v._data = h;
+  return v;
 }
+constexpr fp16::half_storage get_half_storage(half_impl::half h) {
+  return h._data;
+}
+} // half_functions
 
-}
-}
+} // detail
+using half = detail::half_impl::half;
+} // sycl
+} // hipsycl
 
 namespace std {
   template<> class numeric_limits<hipsycl::sycl::half>{
@@ -285,6 +349,6 @@ namespace std {
       return hash<hipsycl::fp16::half_storage>{}(data);
     }
   };
-}
+} // std
 
 #endif

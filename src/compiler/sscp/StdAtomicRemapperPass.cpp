@@ -9,7 +9,9 @@
  */
 // SPDX-License-Identifier: BSD-2-Clause
 #include "hipSYCL/compiler/sscp/StdAtomicRemapperPass.hpp"
+
 #include "hipSYCL/common/debug.hpp"
+#include "hipSYCL/compiler/utils/LLVMUtils.hpp"
 
 
 #include <llvm/IR/Constants.h>
@@ -94,14 +96,14 @@ bool needsBitcastsForIntAtomics(llvm::Module& M, llvm::Type* T) {
 llvm::Value *bitcastToIntN(llvm::Module &M, llvm::Value *V, int BitSize,
                            llvm::Instruction *InsertBefore) {
   auto *TargetType = llvm::IntegerType::get(M.getContext(), BitSize);
-  return new llvm::BitCastInst(V, TargetType, "", InsertBefore);
+  return new llvm::BitCastInst(V, TargetType, "", llvmutils::makeInsertionPoint(InsertBefore));
 }
 
 llvm::Value* ptrcastToIntNPtr(llvm::Module &M, llvm::Value *V, int BitSize,
                            llvm::Instruction *InsertBefore) {
   auto *TargetType = llvm::IntegerType::get(M.getContext(), BitSize);
   return new llvm::BitCastInst(
-      V, getPointerType(TargetType, V->getType()->getPointerAddressSpace()), "", InsertBefore);
+      V, getPointerType(TargetType, V->getType()->getPointerAddressSpace()), "", llvmutils::makeInsertionPoint(InsertBefore));
 }
 
 bool llvmBinOpToAcppBinOp(llvm::AtomicRMWInst::BinOp Op, rmw_op& Out) {
@@ -275,7 +277,7 @@ llvm::Value *createAtomicStore(llvm::Module &M, llvm::Value *Value, llvm::Value 
 
   llvm::Function *Builtin = getAtomicStoreBuiltin(M, BitSize);
   return llvm::CallInst::Create(llvm::FunctionCallee(Builtin->getFunctionType(), Builtin),
-                                llvm::ArrayRef<llvm::Value *>{Args}, "", InsertBefore);
+                                llvm::ArrayRef<llvm::Value *>{Args}, "", llvmutils::makeInsertionPoint(InsertBefore));
 }
 
 
@@ -300,7 +302,7 @@ llvm::Value *createAtomicLoad(llvm::Module &M, llvm::Type* DataType, llvm::Value
 
   llvm::Function *Builtin = getAtomicLoadBuiltin(M, BitSize);
   return llvm::CallInst::Create(llvm::FunctionCallee(Builtin->getFunctionType(), Builtin),
-                                llvm::ArrayRef<llvm::Value *>{Args}, "", InsertBefore);
+                                llvm::ArrayRef<llvm::Value *>{Args}, "", llvmutils::makeInsertionPoint(InsertBefore));
 }
 
 llvm::Value *createAtomicExchange(llvm::Module &M, llvm::Value* Value, llvm::Value *Addr,
@@ -327,7 +329,7 @@ llvm::Value *createAtomicExchange(llvm::Module &M, llvm::Value* Value, llvm::Val
 
   llvm::Function *Builtin = getAtomicExchangeBuiltin(M, BitSize);
   return llvm::CallInst::Create(llvm::FunctionCallee(Builtin->getFunctionType(), Builtin),
-                                llvm::ArrayRef<llvm::Value *>{Args}, "", InsertBefore);
+                                llvm::ArrayRef<llvm::Value *>{Args}, "", llvmutils::makeInsertionPoint(InsertBefore));
 }
 
 llvm::Value *createAtomicCmpExchange(llvm::Module &M, bool IsStrong, llvm::Value *Value,
@@ -358,7 +360,7 @@ llvm::Value *createAtomicCmpExchange(llvm::Module &M, bool IsStrong, llvm::Value
 
   llvm::Function *Builtin = getAtomicCmpExchangeBuiltin(M, IsStrong, BitSize);
   return llvm::CallInst::Create(llvm::FunctionCallee(Builtin->getFunctionType(), Builtin),
-                                llvm::ArrayRef<llvm::Value *>{Args}, "", InsertBefore);
+                                llvm::ArrayRef<llvm::Value *>{Args}, "", llvmutils::makeInsertionPoint(InsertBefore));
 }
 
 llvm::Value *createAtomicFetchOp(llvm::Module &M, llvm::AtomicRMWInst::BinOp LLVMOp,
@@ -403,7 +405,7 @@ llvm::Value *createAtomicFetchOp(llvm::Module &M, llvm::AtomicRMWInst::BinOp LLV
     return nullptr;
 
   return llvm::CallInst::Create(llvm::FunctionCallee(Builtin->getFunctionType(), Builtin),
-                                llvm::ArrayRef<llvm::Value *>{Args}, "", InsertBefore);
+                                llvm::ArrayRef<llvm::Value *>{Args}, "", llvmutils::makeInsertionPoint(InsertBefore));
 }
 }
 
@@ -472,8 +474,8 @@ llvm::PreservedAnalyses StdAtomicRemapperPass::run(llvm::Module &M,
 
     // Create alloca and store expected value - this we can later use
     // as pointer argument for the builtin
-    llvm::AllocaInst* ExpectedAI = new llvm::AllocaInst(CI->getCompareOperand()->getType(), 0, "", CI);
-    llvm::StoreInst *ExpectedStore = new llvm::StoreInst(CI->getCompareOperand(), ExpectedAI, CI);
+    llvm::AllocaInst* ExpectedAI = new llvm::AllocaInst(CI->getCompareOperand()->getType(), 0, "", llvmutils::makeInsertionPoint(CI));
+    llvm::StoreInst *ExpectedStore = new llvm::StoreInst(CI->getCompareOperand(), ExpectedAI, llvmutils::makeInsertionPoint(CI));
     if (auto *NewI = createAtomicCmpExchange(
             M, !CI->isWeak(), CI->getNewValOperand(), CI->getPointerOperand(), ExpectedAI,
             llvmOrderingToAcppOrdering(SuccessOrder), llvmOrderingToAcppOrdering(FailureOrder),
@@ -481,14 +483,14 @@ llvm::PreservedAnalyses StdAtomicRemapperPass::run(llvm::Module &M,
 
       llvm::Value* RetVal = llvm::UndefValue::get(CI->getType());
       llvm::Value *ExpectedLoad =
-          new llvm::LoadInst(CI->getCompareOperand()->getType(), ExpectedAI, "", CI);
+          new llvm::LoadInst(CI->getCompareOperand()->getType(), ExpectedAI, "", llvmutils::makeInsertionPoint(CI));
       
       llvm::SmallVector<unsigned int> InsertExpectedArgs{0};
       auto* I1 = llvm::InsertValueInst::Create(
-          RetVal, ExpectedLoad, llvm::ArrayRef<unsigned int>{InsertExpectedArgs}, "", CI);
+          RetVal, ExpectedLoad, llvm::ArrayRef<unsigned int>{InsertExpectedArgs}, "", llvmutils::makeInsertionPoint(CI));
       InsertExpectedArgs = {1};
       auto* I2 = llvm::InsertValueInst::Create(
-          I1, NewI, llvm::ArrayRef<unsigned int>{InsertExpectedArgs}, "", CI);
+          I1, NewI, llvm::ArrayRef<unsigned int>{InsertExpectedArgs}, "", llvmutils::makeInsertionPoint(CI));
       
       CI->replaceNonMetadataUsesWith(I2);
       ReplacedInstructions.push_back(CI);

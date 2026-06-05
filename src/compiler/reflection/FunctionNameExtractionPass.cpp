@@ -23,6 +23,8 @@
 #include <llvm/IR/GlobalVariable.h>
 #include <llvm/Support/Alignment.h>
 
+
+
 namespace hipsycl {
 namespace compiler {
 
@@ -47,9 +49,10 @@ bool isReflectionAnnotatedFunction(llvm::Function* F, const utils::ProcessFuncti
 bool isAnyUserReflectionAnnotatedFunction(llvm::Function* F, const utils::ProcessFunctionAnnotationPass& PFA) {
   for(auto* U : F->users()) {
     if(auto* CB = llvm::dyn_cast<llvm::CallBase>(U)) {
-      if(CB->getCalledFunction() != F) {
+      auto* CalledF = CB->getCalledFunction();
+      if(CalledF && (CalledF != F)) {
       
-        if(isReflectionAnnotatedFunction(CB->getCalledFunction(), PFA))
+        if(isReflectionAnnotatedFunction(CalledF, PFA))
           return true;
       
       }
@@ -59,6 +62,21 @@ bool isAnyUserReflectionAnnotatedFunction(llvm::Function* F, const utils::Proces
 }
 
 }
+
+llvm::Type* getCharPtrType(llvm::Module* M, unsigned AS = 0) {
+  #if LLVM_VERSION_MAJOR >= 16
+      return llvm::PointerType::get(M->getContext(), AS);
+  #else
+      return llvm::PointerType::get(llvm::Type::getInt8Ty(M->getContext()), AS);
+  #endif
+  }
+  llvm::Type* getVoidPtrType(llvm::Module* M, unsigned AS = 0) {
+    #if LLVM_VERSION_MAJOR >= 16
+        return llvm::PointerType::get(M->getContext(), AS);
+    #else
+        return llvm::PointerType::get(llvm::Type::getInt8Ty(M->getContext()), AS);
+    #endif
+  }
 
 llvm::PreservedAnalyses FunctionNameExtractionPass::run(llvm::Module &M, llvm::ModuleAnalysisManager &AM) {
   std::string GVPrefix = "__acpp_functioninfo_";
@@ -81,11 +99,27 @@ llvm::PreservedAnalyses FunctionNameExtractionPass::run(llvm::Module &M, llvm::M
     }
   }
 
+  //declare explicitly __acpp_reflection_associate_function_pointer
+  static const char* ReflectionAssociateFunctionPointer = "__acpp_reflection_associate_function_pointer";
+  llvm::SmallVector<llvm::Type*> ParamTs;
+  // function pointer
+  ParamTs.push_back(getVoidPtrType(&M));
+  // function name
+  ParamTs.push_back(getCharPtrType(&M));  
+  // declare if not already declared
+  auto FC = M.getOrInsertFunction(ReflectionAssociateFunctionPointer,
+                                  llvm::FunctionType::get(llvm::Type::getVoidTy(M.getContext()),
+                                                          llvm::ArrayRef<llvm::Type *>{ParamTs},
+                                                          false));
+  llvm::Function *NewDeclaration = llvm::dyn_cast<llvm::Function>(FC.getCallee());
+  std::string NewDeclarationName = NewDeclaration->getName().str();
+  
+  
   llvm::Function* MapFunc = nullptr;
   for(auto& F : M)
     if(F.getName().contains("__acpp_reflection_associate_function_pointer"))
       MapFunc = &F;
-
+  
   if(MapFunc) {
     if(auto* InitFunc = M.getFunction("__acpp_reflection_init_registered_function_pointers")){
       if(InitFunc->isDeclaration() && (MapFunc->getFunctionType()->getNumParams() == 2)) {

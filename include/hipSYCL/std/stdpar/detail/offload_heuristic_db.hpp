@@ -36,22 +36,39 @@ struct transform {};
 struct copy {};
 struct copy_if {};
 struct copy_n {};
+struct move {};
 struct fill {};
 struct fill_n {};
 struct generate {};
 struct generate_n {};
+struct remove_copy {};
+struct remove_copy_if {};
+struct remove {};
+struct remove_if {};
 struct replace {};
 struct replace_if {};
 struct replace_copy {};
 struct replace_copy_if {};
+struct reverse {};
+struct reverse_copy {};
 struct find {};
 struct find_if {};
 struct find_if_not {};
+struct find_end {};
+struct find_first_of {};
 struct all_of {};
 struct any_of {};
 struct none_of {};
+struct count{};
+struct count_if{};
+struct mismatch{};
+struct equal {};
 struct sort {};
+struct is_sorted {};
+struct is_sorted_until {};
 struct merge {};
+struct min_element {};
+struct max_element {};
 struct inclusive_scan {};
 struct exclusive_scan {};
 struct transform_inclusive_scan {};
@@ -219,7 +236,8 @@ private:
 
   static std::string get_dataset_name() {
     std::string dataset_name;
-    if(rt::try_get_environment_variable("stdpar_dataset_name", dataset_name)) {
+    if (common::settings::try_retrieve_settings_variable("stdpar_dataset_name",
+                                                         dataset_name)) {
       return dataset_name;
     }
     return ".acpp-stdpar-profile";

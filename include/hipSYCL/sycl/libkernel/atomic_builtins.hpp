@@ -124,6 +124,10 @@ HIPSYCL_BUILTIN T __acpp_atomic_fetch_max(T *addr, T x, memory_order order,
                                   scope);
 }
 
+HIPSYCL_BUILTIN void __acpp_atomic_fence(memory_order order, memory_scope scope){
+  HIPSYCL_DISPATCH_BUILTIN(__acpp_atomic_fence, order, scope);
+} 
+
 
 }
 }

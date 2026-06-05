@@ -56,22 +56,7 @@
 #include "hipSYCL/algorithms/util/memory_streaming.hpp"
 #include "hipSYCL/algorithms/util/allocation_cache.hpp"
 
-#ifndef ACPP_FORCE_INSTANT_SUBMISSION
-#define ACPP_FORCE_INSTANT_SUBMISSION 0
-#endif
 
-#if defined(HIPSYCL_ALLOW_INSTANT_SUBMISSION) && !defined(ACPP_ALLOW_INSTANT_SUBMISSION)
-#define ACPP_ALLOW_INSTANT_SUBMISSION HIPSYCL_ALLOW_INSTANT_SUBMISSION
-#endif
-
-#if ACPP_FORCE_INSTANT_SUBMISSION
-#undef ACPP_ACPP_ALLOW_INSTANT_SUBMISSION
-#define ACPP_ACPP_ALLOW_INSTANT_SUBMISSION 1
-#endif
-
-#ifndef ACPP_ALLOW_INSTANT_SUBMISSION
-#define ACPP_ALLOW_INSTANT_SUBMISSION 0
-#endif
 
 namespace hipsycl {
 namespace sycl {
@@ -312,14 +297,19 @@ public:
   void parallel_for(range<dimensions> numWorkItems,
                     const ReductionsAndKernel &... redu_kernel) {
 
-    auto invoker = [&](auto&& kernel, auto&&... reductions){
-      this->submit_kernel<KernelName, rt::kernel_type::basic_parallel_for>(
+    if(numWorkItems.size() == 0)
+      AdaptiveCpp_enqueue_custom_operation([](auto&){});
+
+    else {
+      auto invoker = [&](auto&& kernel, auto&&... reductions){
+        this->submit_kernel<KernelName, rt::kernel_type::basic_parallel_for>(
           sycl::id<dimensions>{}, numWorkItems,
           get_preferred_group_size<dimensions>(),
           kernel, reductions...);
-    };
+      };
 
-    detail::separate_last_argument_and_apply(invoker, redu_kernel...);
+      detail::separate_last_argument_and_apply(invoker, redu_kernel...);
+    }
   }
 
   template <typename KernelName = __acpp_unnamed_kernel,
@@ -327,14 +317,19 @@ public:
   void parallel_for(range<1> numWorkItems,
                     const ReductionsAndKernel &... redu_kernel) {
 
-    auto invoker = [&](auto&& kernel, auto&&... reductions){
-      this->submit_kernel<KernelName, rt::kernel_type::basic_parallel_for>(
+    if(numWorkItems == 0)
+      AdaptiveCpp_enqueue_custom_operation([](auto&){});
+
+    else {
+      auto invoker = [&](auto&& kernel, auto&&... reductions){
+        this->submit_kernel<KernelName, rt::kernel_type::basic_parallel_for>(
           sycl::id<1>{}, numWorkItems,
           get_preferred_group_size<1>(),
           kernel, reductions...);
-    };
+      };
 
-    detail::separate_last_argument_and_apply(invoker, redu_kernel...);
+      detail::separate_last_argument_and_apply(invoker, redu_kernel...);
+    }
   }
 
   template <typename KernelName = __acpp_unnamed_kernel,
@@ -342,14 +337,20 @@ public:
   void parallel_for(range<dimensions> numWorkItems,
                     id<dimensions> workItemOffset,
                     const ReductionsAndKernel &... redu_kernel) {
-    auto invoker = [&](auto&& kernel, auto&& ... reductions) {
-      this->submit_kernel<KernelName, rt::kernel_type::basic_parallel_for>(
+
+    if(numWorkItems.size() == 0)
+      AdaptiveCpp_enqueue_custom_operation([](auto&){});
+
+    else {
+      auto invoker = [&](auto&& kernel, auto&& ... reductions) {
+        this->submit_kernel<KernelName, rt::kernel_type::basic_parallel_for>(
           workItemOffset, numWorkItems,
           get_preferred_group_size<dimensions>(),
           kernel, reductions...);
-    };
+      };
 
-    detail::separate_last_argument_and_apply(invoker, redu_kernel...);
+      detail::separate_last_argument_and_apply(invoker, redu_kernel...);
+    }
   }
 
   template <typename KernelName = __acpp_unnamed_kernel,
@@ -357,14 +358,20 @@ public:
   void parallel_for(range<1> numWorkItems,
                     id<1> workItemOffset,
                     const ReductionsAndKernel &... redu_kernel) {
-    auto invoker = [&](auto&& kernel, auto&& ... reductions) {
-      this->submit_kernel<KernelName, rt::kernel_type::basic_parallel_for>(
+
+    if(numWorkItems == 0)
+      AdaptiveCpp_enqueue_custom_operation([](auto&){});
+
+    else {
+      auto invoker = [&](auto&& kernel, auto&& ... reductions) {
+        this->submit_kernel<KernelName, rt::kernel_type::basic_parallel_for>(
           workItemOffset, numWorkItems,
           get_preferred_group_size<1>(),
           kernel, reductions...);
-    };
+      };
 
-    detail::separate_last_argument_and_apply(invoker, redu_kernel...);
+      detail::separate_last_argument_and_apply(invoker, redu_kernel...);
+    }
   }
 
   template <typename KernelName = __acpp_unnamed_kernel,
@@ -373,9 +380,9 @@ public:
                     const ReductionsAndKernel &... redu_kernel) {
     auto invoker = [&](auto&& kernel, auto&& ... reductions) {
       this->submit_kernel<KernelName, rt::kernel_type::ndrange_parallel_for>(
-          executionRange.get_offset(), executionRange.get_global_range(),
-          executionRange.get_local_range(),
-          kernel, reductions...);
+        executionRange.get_offset(), executionRange.get_global_range(),
+        executionRange.get_local_range(),
+        kernel, reductions...);
     };
 
     detail::separate_last_argument_and_apply(invoker, redu_kernel...);
@@ -446,13 +453,13 @@ public:
 
   template <typename T, int dim, access::mode mode, access::target tgt,
             accessor_variant variant>
-  void copy(accessor<T, dim, mode, tgt, variant> src, shared_ptr_class<T> dest) {
+  void copy(accessor<T, dim, mode, tgt, variant> src, std::shared_ptr<T> dest) {
     copy_ptr(src, dest);
   }
 
   template <typename T, int dim, access::mode mode, access::target tgt,
             accessor_variant variant>
-  void copy(shared_ptr_class<T> src, accessor<T, dim, mode, tgt, variant> dest) {
+  void copy(std::shared_ptr<T> src, accessor<T, dim, mode, tgt, variant> dest) {
     copy_ptr(src, dest);
   }
 
@@ -1187,20 +1194,15 @@ private:
     if(executor && executor->is_inorder_queue())
       is_dedicated_in_order_queue = true;
 
-    if (!ACPP_ALLOW_INSTANT_SUBMISSION || uses_buffers ||
+    if (uses_buffers ||
         has_non_instant_dependency || is_unbound ||
         !is_dedicated_in_order_queue ||
         op->is_requirement()) {
-#if ACPP_FORCE_INSTANT_SUBMISSION
-      throw exception{make_error_code(errc::invalid), "Instant submission not possible, "
-          "but application was built with ACPP_FORCE_INSTANT_SUBMISSION=1"};
-#else
       // traditional submission
       rt::dag_build_guard build{_rt->dag()};
       _contains_non_instant_nodes = true;
 
       return build.builder()->add_command_group(std::move(op), requirements, hints);
-#endif
     } else {
 
       rt::dag_node_ptr node = std::make_shared<rt::dag_node>(

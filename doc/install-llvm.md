@@ -4,23 +4,26 @@ Certain backends/compilation flows require LLVM. This is because AdaptiveCpp nee
 
 Generally, we recommend the latest officially released clang/LLVM versions, but older versions might also work depending on the compilation flow (see the table from the main installation instructions).
 
+**AdaptiveCpp does not support unreleased or development versions of LLVM.**
+
 Usually, the clang/LLVM versions provided in Linux distribution repositories are sufficient, if they are recent enough. 
 *In this case, AdaptiveCpp might automatically detect and configure your LLVM installation without additional cmake arguments required.* **We therefore recommend to make your life easy: Check your distribution's LLVM version against the AdaptiveCpp requirements and if they match, use it**.
 
 If you are using Ubuntu or Debian, we can also recommend the package repositories at `http://apt.llvm.org` if you wish to obtain a newer LLVM.
 
 Install
-* clang (including development headers)
-* LLVM (including development headers)
-* libomp (including development headers)
-* lld (only for the ROCm backend)
 
-For example, the required steps to install clang 16 on an Ubuntu system are:
+* clang (including development headers)
+* LLVM (including development headers and llc/opt tools)
+* libomp (including development headers)
+* lld
+
+For example, the required steps to install clang 21 on an Ubuntu system are:
 ```
 wget https://apt.llvm.org/llvm.sh #Convenience script that sets up the repositories
 chmod +x llvm.sh
-./llvm.sh 16 #Set up repositories for clang 16
-apt install -y libclang-16-dev clang-tools-16 libomp-16-dev llvm-16-dev lld-16
+./llvm.sh 21 #Set up repositories for clang 21
+apt install -y libclang-21-dev clang-tools-21 libomp-21-dev llvm-21-dev lld-21
 ```
 
 #### Only if you wish to compile LLVM from source (not recommended)
@@ -31,24 +34,25 @@ It is generally not necessary to compile LLVM by yourself. However, if you wish 
 - Generate `libLLVM.so`: `-DLLVM_BUILD_LLVM_DYLIB=ON` (only required if the SSCP compilation flow is enabled when building AdaptiveCpp, which is true by default for supported versions of LLVM)
 - Enable the correct backends for your hardware: `nvptx` for NVIDIA GPUs and `amdgpu` for AMD GPUs.
 
-An example build of LLVM 15 from source might look like this:
+An example build of LLVM 21 from source might look like this:
 
 ```
-git clone https://github.com/llvm/llvm-project -b release/15.x
+git clone https://github.com/llvm/llvm-project -b release/21.x
 cd llvm-project
 mkdir -p build
 cd build
 
 INSTALL_PREFIX=/path/to/desired/llvm/installation/directory
 
-cmake -DCMAKE_C_COMPILER=`which clang` -DCMAKE_CXX_COMPILER=`which clang++` \
+cmake -DCMAKE_C_COMPILER=`which gcc` \
+      -DCMAKE_CXX_COMPILER=`which g++` \
       -DCMAKE_BUILD_TYPE=Release \
-      -DLLVM_ENABLE_PROJECTS="clang;compiler-rt;lld;openmp" \
+      -DCMAKE_INSTALL_PREFIX=$INSTALL_PREFIX \
+      -DLLVM_ENABLE_PROJECTS="clang;lld;openmp" \
+      -DLLVM_ENABLE_RUNTIMES=compiler-rt \
       -DOPENMP_ENABLE_LIBOMPTARGET=OFF \
-      -DCMAKE_BUILD_TYPE=Release \
       -DLLVM_ENABLE_ASSERTIONS=OFF \
       -DLLVM_TARGETS_TO_BUILD="AMDGPU;NVPTX;X86" \
-      -DCLANG_ANALYZER_ENABLE_Z3_SOLVER=0 \
       -DLLVM_INCLUDE_BENCHMARKS=0 \
       -DLLVM_INCLUDE_EXAMPLES=0 \
       -DLLVM_INCLUDE_TESTS=0 \
@@ -58,13 +62,10 @@ cmake -DCMAKE_C_COMPILER=`which clang` -DCMAKE_CXX_COMPILER=`which clang++` \
       -DLLVM_ENABLE_BINDINGS=OFF \
       -DLLVM_TEMPORARILY_ALLOW_OLD_TOOLCHAIN=OFF \
       -DLLVM_BUILD_LLVM_DYLIB=ON \
-      -DLLVM_ENABLE_DUMP=OFF  ../llvm
+      -DLLVM_ENABLE_DUMP=OFF \
+      ../llvm
+
 make install
-```
-
-```
-cmake -DCMAKE_C_COMPILER=`which clang` -DCMAKE_CXX_COMPILER=`which clang++` -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_ASSERTIONS=OFF -DLLVM_ENABLE_PROJECTS="clang;compiler-rt;lld;openmp" -DOPENMP_ENABLE_LIBOMPTARGET=OFF -DLLVM_TARGETS_TO_BUILD="AMDGPU;NVPTX;X86" -DCLANG_ANALYZER_ENABLE_Z3_SOLVER=0 -DLLVM_INCLUDE_BENCHMARKS=0 -DLLVM_INCLUDE_EXAMPLES=0 -DLLVM_INCLUDE_TESTS=0 -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=ON -DCMAKE_INSTALL_RPATH=lib -DLLVM_ENABLE_OCAMLDOC=OFF -DLLVM_ENABLE_BINDINGS=OFF -DLLVM_TEMPORARILY_ALLOW_OLD_TOOLCHAIN=OFF -DLLVM_BUILD_LLVM_DYLIB=ON -DLLVM_ENABLE_DUMP=OFF  ../ -DLLVM_EXTERNAL_PROJECTS="rv" -DLLVM_EXTERNAL_RV_SOURCE_DIR=../rv -G Ninja
-
 ```
 
 ## Pointing AdaptiveCpp to the right LLVM
@@ -72,14 +73,15 @@ cmake -DCMAKE_C_COMPILER=`which clang` -DCMAKE_CXX_COMPILER=`which clang++` -DCM
 When invoking cmake, the AdaptiveCpp build infrastructure will attempt to find LLVM automatically (see below for how to invoke cmake).
 
 If AdaptiveCpp does not automatically configure the build for the desired clang/LLVM installation, the following cmake variables can be used to point AdaptiveCpp to the right one:
+
 * `-DLLVM_DIR=/path/to/llvm/cmake` must be pointed to your LLVM installation, specifically, the **subdirectory containing the LLVM cmake files**. Note that different LLVM installations may have the LLVM cmake files in different subdirectories that don't necessarily end with `cmake` (e.g. it might also be `/path/to/llvm/lib/cmake/llvm`). Alternatively, you can try `-DLLVM_ROOT` which might be more forgiving.
 
 Verify from the cmake that the selected `clang++` and include headers match the LLVM that you have requested. Example output:
 ```
 ...
--- Building AdaptiveCpp against LLVM configured from /usr/lib/llvm-16/cmake/
--- Selecting clang: /usr/bin/clang++-16
--- Using clang include directory: /usr/include/clang/16.0.1/include/..
+-- Building AdaptiveCpp against LLVM configured from /usr/lib/llvm-20/cmake
+-- Selecting clang: /usr/lib/llvm-20/bin/clang++
+-- Using clang include directory: /usr/lib/llvm-20/lib/clang/20/include/..
 ...
 ```
 
@@ -108,6 +110,7 @@ In that case, clang can be informed about the location of the GCC toolchain usin
 *Note:* This flag is very picky about the directory!. It needs to be provided with the parent directory that contains the `lib/gcc/<arch>/<version>` subdirectories. On a Cray system, this might e.g. be `--gcc-toolchain=/opt/cray/pe/gcc/12.2.0/snos`. If an incorrect path is provided, clang may silently ignore the argument. Use `clang++ -v /dev/null` as described above to check that it has accepted the GCC installation.
 
 While in theory AdaptiveCpp can be made to use that flag when compiling, a simpler solution to make that change permanent is to use clang configuration files ([details in the clang documentation](https://clang.llvm.org/docs/UsersManual.html#id25)):
+
 1. In the directory where `clang++` lives (e.g. some `bin` directory), create a new file `<name>.cfg`, replacing `<name>` with something of your choice.
 2. Put any flags that you want clang to use by default into this file, such as the `--gcc-toolchain=...` flag.
 3. Create a symlink to clang in the same directory that `clang++` and the config file exist in: `ln -s clang++ <name>-clang++`, again replacing `<name>` with the name of your config file.

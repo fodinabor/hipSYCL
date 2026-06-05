@@ -9,11 +9,14 @@
  */
 // SPDX-License-Identifier: BSD-2-Clause
 #include "hipSYCL/common/debug.hpp"
+#include "hipSYCL/common/filesystem.hpp"
 #include "hipSYCL/common/string_utils.hpp"
 #include "hipSYCL/runtime/device_id.hpp"
 #include "hipSYCL/runtime/settings.hpp"
 
 #include <string>
+#include <fstream>
+#include <optional>
 
 namespace hipsycl {
 namespace rt {
@@ -40,6 +43,7 @@ void trim(std::string& str) {
 bool is_number(const std::string& str){
   return str.find_first_not_of("0123456789") == std::string::npos;
 }
+
 }
 
 visibility_mask_t::mapped_type parse_device_visibility_mask(const std::string& str) {
@@ -57,15 +61,15 @@ visibility_mask_t::mapped_type parse_device_visibility_mask(const std::string& s
       if(is_number(components[0])) {
         current.device_index_equality = std::stoi(components[0]);
       } else if(components[0] != "*") {
-        current.device_name_match = components[0]; 
+        current.device_name_match = components[0];
       }
     } else if (components.size() > 1) {
       if(is_number(components[0])) {
         current.platform_index_equality = std::stoi(components[0]);
       } else if(components[0] != "*") {
-        current.platform_name_match = components[0]; 
+        current.platform_name_match = components[0];
       }
-      
+
       if(is_number(components[1])) {
         current.device_index_equality = std::stoi(components[1]);
       } else if(components[1] != "*") {
@@ -74,7 +78,7 @@ visibility_mask_t::mapped_type parse_device_visibility_mask(const std::string& s
     }
     device_visibility_conditions.push_back(current);
   }
-  
+
   return device_visibility_conditions;
 }
 
@@ -84,7 +88,7 @@ bool device_matches(const visibility_mask_t::mapped_type &conditions,
                     const std::string &platform_name) {
   if(conditions.empty())
     return true;
-  
+
   // The logic is: All individual device visibility conditions are connected by or,
   // but the conditions within each condition are connected by and.
   for(const auto& c : conditions) {
@@ -135,14 +139,14 @@ bool has_device_visibility_mask(const visibility_mask_t& mask, backend_id backen
 std::istream &operator>>(std::istream &istr, visibility_mask_t &out) {
   std::string str;
   istr >> str;
-  // have to copy, as otherweise might be interpreted as failing, although everything is fine.
+  // have to copy, as otherwise might be interpreted as failing, although everything is fine.
   std::istringstream istream{str};
 
   std::string backend_specific_substring;
   while(std::getline(istream, backend_specific_substring, ';')) {
     if(backend_specific_substring.empty())
       continue;
-    
+
     std::size_t delimiter = backend_specific_substring.find(':');
     std::string name;
     if(delimiter != std::string::npos) {
@@ -165,6 +169,8 @@ std::istream &operator>>(std::istream &istr, visibility_mask_t &out) {
       backend = rt::backend_id::omp;
     } else if (name == "ocl" || name == "opencl") {
       backend = rt::backend_id::ocl;
+    } else if (name == "metal") {
+      backend = rt::backend_id::metal;
     } else {
       istr.setstate(std::ios_base::failbit);
       // Don't use HIPSYCL_DEBUG_WARNING, it will cause recursive init error.
@@ -193,6 +199,30 @@ std::istream &operator>>(std::istream &istr, default_selector_behavior& out) {
     out = default_selector_behavior::system;
   else
     istr.setstate(std::ios_base::failbit);
+  return istr;
+}
+
+std::istream &operator>>(std::istream &istr, std::optional<jitopt_host_vector_math_library>& out) {
+  std::string str;
+  istr >> str;
+
+  std::transform(str.begin(), str.end(), str.begin(), ::tolower);
+
+  if (str == "none")
+    out = jitopt_host_vector_math_library::none;
+  else if (str == "svml")
+    out = jitopt_host_vector_math_library::svml;
+  else if (str == "armpl")
+    out = jitopt_host_vector_math_library::armpl;
+  else if (str == "sleef")
+    out = jitopt_host_vector_math_library::sleef;
+  else if (str == "libmvec")
+    out = jitopt_host_vector_math_library::libmvec;
+  else{
+    istr.setstate(std::ios_base::failbit);
+    std::cout << "'" << str << "' is not a valid vector math library option. Valid option are: none, svml, armpl, sleef, libmvec." << std::endl;
+  }
+
   return istr;
 }
 

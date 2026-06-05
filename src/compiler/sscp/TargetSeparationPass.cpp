@@ -8,6 +8,7 @@
  * See file LICENSE in the project root for full license details.
  */
 // SPDX-License-Identifier: BSD-2-Clause
+#include "hipSYCL/compiler/llvm-to-backend/NameHandling.hpp"
 #include "hipSYCL/compiler/sscp/TargetSeparationPass.hpp"
 #include "hipSYCL/compiler/sscp/IRConstantReplacer.hpp"
 #include "hipSYCL/compiler/sscp/KernelOutliningPass.hpp"
@@ -16,13 +17,17 @@
 #include "hipSYCL/compiler/sscp/StdBuiltinRemapperPass.hpp"
 #include "hipSYCL/compiler/sscp/DynamicFunctionSupport.hpp"
 #include "hipSYCL/compiler/sscp/StdAtomicRemapperPass.hpp"
+#include "hipSYCL/compiler/sscp/DeviceAssertPass.hpp"
 #include "hipSYCL/compiler/CompilationState.hpp"
 #include "hipSYCL/compiler/cbs/IRUtils.hpp"
+#include "hipSYCL/compiler/sscp/pcuda/ExternDynamicLocalMemoryPass.hpp"
 #include "hipSYCL/compiler/utils/ProcessFunctionAnnotationsPass.hpp"
 #include "hipSYCL/compiler/utils/LLVMUtils.hpp"
 #include "hipSYCL/common/hcf_container.hpp"
 
+#include <cctype>
 #include <cstddef>
+#include <unordered_map>
 
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Attributes.h>
@@ -146,13 +151,16 @@ struct KernelParam {
 
 struct KernelInfo {
   std::string Name;
+  std::vector<std::size_t> OriginalParamSizes;
   std::vector<KernelParam> Parameters;
 
   KernelInfo() = default;
   KernelInfo(const std::string &KernelName, llvm::Module &M,
-             const std::vector<OriginalParamInfo>& OriginalParamInfos) {
+             const std::vector<std::size_t> &OriginalParamSizes,
+             const std::vector<OriginalParamInfo> &OriginalParamInfos) {
 
     this->Name = KernelName;
+    this->OriginalParamSizes = OriginalParamSizes;
     if(auto* F = M.getFunction(KernelName)) {
 
       auto* FType = F->getFunctionType();
@@ -191,12 +199,91 @@ struct KernelInfo {
   }
 };
 
+#ifdef _MSC_VER
+void replaceInvalidMSABICharsInSymbolNames(llvm::Module &M) {
+  auto UpdateName = [](auto &S) {
+    std::string Name(S.getName());
+    replaceInvalidMSABICharsInSymbolName(Name);
+    S.setName(Name);
+  };
+
+  for(auto &F : M) {
+    UpdateName(F);
+  }
+  for(auto &G : M.globals()){
+    UpdateName(G);
+  }
+}
+#endif
+
+void removeModuleFlag(llvm::Module& M, llvm::StringRef Name) {
+  llvm::SmallVector<llvm::Module::ModuleFlagEntry, 8> Flags;
+  M.getModuleFlagsMetadata(Flags);
+
+  if(Flags.empty())
+    return;
+
+  if(auto* NMD = M.getNamedMetadata("llvm.module.flags"))
+    M.eraseNamedMetadata(NMD);
+
+  for(const auto& Flag : Flags) {
+    if(Flag.Key->getString() == Name)
+      continue;
+
+    M.addModuleFlag(Flag.Behavior, Flag.Key->getString(), Flag.Val);
+  }
+}
+
+void removeLinkerOptionsByPrefixes(
+    llvm::Module& M,
+    llvm::ArrayRef<llvm::StringRef> Prefixes) {
+
+  llvm::NamedMDNode* NMD = M.getNamedMetadata("llvm.linker.options");
+  if(!NMD)
+    return;
+
+  auto StartsWithPrefix = [&](llvm::StringRef Option) {
+    for(auto Prefix : Prefixes) {
+      if(llvmutils::starts_with(Option, Prefix))
+        return true;
+    }
+
+    return false;
+  };
+
+  llvm::SmallVector<llvm::MDNode*, 8> RemainingOptions;
+
+  for(unsigned i = 0; i < NMD->getNumOperands(); ++i) {
+    llvm::MDNode* OptionNode = NMD->getOperand(i);
+
+    bool Remove = false;
+    if(OptionNode && OptionNode->getNumOperands() > 0) {
+      if(auto* Option = llvm::dyn_cast<llvm::MDString>(OptionNode->getOperand(0))) {
+        Remove = StartsWithPrefix(Option->getString());
+      }
+    }
+
+    if(!Remove)
+      RemainingOptions.push_back(OptionNode);
+  }
+
+  M.eraseNamedMetadata(NMD);
+
+  if(!RemainingOptions.empty()) {
+    llvm::NamedMDNode* NewNMD =
+        M.getOrInsertNamedMetadata("llvm.linker.options");
+
+    for(llvm::MDNode* OptionNode : RemainingOptions)
+      NewNMD->addOperand(OptionNode);
+  }
+}
 
 std::unique_ptr<llvm::Module> generateDeviceIR(llvm::Module &M,
                                                const std::vector<std::string>& DynamicFunctions,
                                                std::vector<KernelInfo> &KernelInfoOutput,
                                                std::vector<std::string> &ExportedSymbolsOutput,
-                                               std::vector<std::string> &ImportedSymbolsOutput) {
+                                               std::vector<std::string> &ImportedSymbolsOutput,
+                                               bool EnablePCuda) {
 
   std::unique_ptr<llvm::Module> DeviceModule = llvm::CloneModule(M);
   DeviceModule->setModuleIdentifier("device." + DeviceModule->getModuleIdentifier());
@@ -231,6 +318,9 @@ std::unique_ptr<llvm::Module> generateDeviceIR(llvm::Module &M,
   // Remap atomics
   StdAtomicRemapperPass SAMP;
   SAMP.run(*DeviceModule, DeviceMAM);
+  // Handle assert() in device code
+  DeviceAssertPass DAP;
+  DAP.run(*DeviceModule, DeviceMAM);
 
   // Fix attributes for generic IR representation
   llvm::SmallVector<llvm::Attribute::AttrKind, 16> AttrsToRemove;
@@ -246,6 +336,14 @@ std::unique_ptr<llvm::Module> generateDeviceIR(llvm::Module &M,
   StringAttrsToRemove.push_back("target-cpu");
   StringAttrsToRemove.push_back("target-features");
   StringAttrsToRemove.push_back("tune-cpu");
+  
+  // Remove host-specific module flags that should not leak into generic device IR
+  removeModuleFlag(*DeviceModule, "wchar_size");  
+
+#ifdef _WIN32
+  // Remove MSVC host linker directives from generic device IR
+  removeLinkerOptionsByPrefixes(*DeviceModule, {"/"});
+#endif
 
   llvm::SmallSet<llvm::Function *, 16> AcppNoInlineFunctions;
   utils::findFunctionsWithStringAnnotations(
@@ -284,6 +382,16 @@ std::unique_ptr<llvm::Module> generateDeviceIR(llvm::Module &M,
     }
   }
 
+#ifdef _MSC_VER
+  replaceInvalidMSABICharsInSymbolNames(*DeviceModule);
+#endif
+
+  if (EnablePCuda) {
+    const unsigned LocalMemAS = 3;
+    ExternDynamicLocalMemoryPass EDLMP{LocalMemAS, true};
+    EDLMP.run(*DeviceModule, DeviceMAM);
+  }
+
   EntrypointPreparationPass EPP{ExportAllSymbols};
   EPP.run(*DeviceModule, DeviceMAM);
   
@@ -315,8 +423,8 @@ std::unique_ptr<llvm::Module> generateDeviceIR(llvm::Module &M,
   KernelOutliningPass KP{EPP.getOutliningEntrypoints()};
   KP.run(*DeviceModule, DeviceMAM);
 
-   // Scan for imported function definitions
-   ImportedSymbolsOutput.clear();
+  // Scan for imported function definitions
+  ImportedSymbolsOutput.clear();
   for(auto& F : *DeviceModule) {
     if(F.size() == 0) {
       // We currently use the heuristic that functions are imported
@@ -325,6 +433,25 @@ std::unique_ptr<llvm::Module> generateDeviceIR(llvm::Module &M,
       // be better if we could tell clang to annotate the declaration for us :(
       if(!F.isIntrinsic() && !llvmutils::starts_with(F.getName(), "__"))
         ImportedSymbolsOutput.push_back(F.getName().str());
+    }
+  }
+
+  // Save original number of params and sizes before expanding arguments.
+  // This corresponds to host-side interface of the kernel.
+  // Note: Assumes that the KernelArgumentCanonicalizationPass has been run!
+  std::unordered_map<std::string, std::vector<std::size_t>> OriginalParameterSizes;
+  for(const auto& KN : EPP.getKernelNames()) {
+    if(auto* F = M.getFunction(KN)) {
+      std::vector<std::size_t> OriginalParamSizes;
+      auto& Sizes = OriginalParameterSizes[F->getName().str()];
+      for(int i = 0; i < F->getFunctionType()->getNumParams(); ++i) {
+        auto* Arg = F->getArg(i);
+        if(Arg->hasByValAttr())
+          Sizes.push_back(M.getDataLayout().getIndexTypeSizeInBits(Arg->getParamByValType()) /
+                          CHAR_BIT);
+        else
+          Sizes.push_back(M.getDataLayout().getTypeSizeInBits(Arg->getType()) / CHAR_BIT);
+      }
     }
   }
 
@@ -345,7 +472,7 @@ std::unique_ptr<llvm::Module> generateDeviceIR(llvm::Module &M,
     auto* OriginalParamInfos = KernelArgExpansionPass.getInfosOnOriginalParams(Name);
     assert(OriginalParamInfos);
 
-    KernelInfo KI{Name, *DeviceModule, *OriginalParamInfos};
+    KernelInfo KI{Name, *DeviceModule, OriginalParameterSizes[Name], *OriginalParamInfos};
     KernelInfoOutput.push_back(KI);
   }
 
@@ -387,7 +514,15 @@ generateHCF(llvm::Module &DeviceModule, std::size_t HcfObjectId,
   for(const auto& Kernel : Kernels) {
     auto* K = KernelsNode->add_subnode(Kernel.Name);
     K->set_as_list("image-providers", {std::string{"llvm-ir.global"}});
+
+    std::vector<std::string> OriginalSizesStrings;
+    for(const auto& S : Kernel.OriginalParamSizes)
+      OriginalSizesStrings.push_back(std::to_string(S));
     
+    auto* HSPS = K->add_subnode("host-side-parameter-sizes");
+    for(int i = 0; i < OriginalSizesStrings.size(); ++i)
+      HSPS->set(std::to_string(i), OriginalSizesStrings[i]);
+
     auto* FlagsNode = K->add_subnode("compile-flags");
     for(const auto& F : KernelCompileFlags) {
       FlagsNode->set(F, "1");
@@ -437,6 +572,7 @@ llvm::PreservedAnalyses TargetSeparationPass::run(llvm::Module &M,
 
   {
     ScopedPrintingTimer totalTimer{"TargetSeparationPass (total)"};
+
     // TODO If we know that the SSCP compilation flow is the only one using HCF,
     // we could just enumerate the objects instead of generating (hopefully)
     // unique random numbers.
@@ -455,7 +591,8 @@ llvm::PreservedAnalyses TargetSeparationPass::run(llvm::Module &M,
       
       Timer IRGenTimer{"generateDeviceIR", true};
       std::unique_ptr<llvm::Module> DeviceIR = generateDeviceIR(
-          M, DFI.getDynamicFunctionNames(), Kernels, ExportedSymbols, ImportedSymbols);
+          M, DFI.getDynamicFunctionNames(), Kernels, ExportedSymbols, ImportedSymbols, EnablePCuda);
+      
       IRGenTimer.stopAndPrint();
 
       Timer HCFGenTimer{"generateHCF"};
@@ -508,10 +645,13 @@ llvm::PreservedAnalyses TargetSeparationPass::run(llvm::Module &M,
       IRConstant::optimizeCodeAfterConstantModification(M, MAM);
     }
   }
+  
   return llvm::PreservedAnalyses::none();
 }
 
-TargetSeparationPass::TargetSeparationPass(const std::string &KernelCompilationOptions) {
+TargetSeparationPass::TargetSeparationPass(const std::string &KernelCompilationOptions, bool PCUDA)
+    : EnablePCuda{PCUDA} {
+
   llvm::StringRef Opts{KernelCompilationOptions};
 
   llvm::SmallVector<llvm::StringRef> Fragments;

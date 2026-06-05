@@ -14,7 +14,6 @@
     * `system`: Makes default selector behave like a system selector from the `ACPP_EXT_MULTI_DEVICE_QUEUE` extension
 * `ACPP_HCF_DUMP_DIRECTORY`: If set, hipSYCL will dump all embedded HCF data files in this directory. HCF is hipSYCL's container format that is used by all compilation flows that are fully controlled by hipSYCL to store kernel code.
 * `ACPP_PERSISTENT_RUNTIME`: If set to 1, hipSYCL will use a persistent runtime that will continue to live even if no SYCL objects are currently in use in the application. This can be helpful if the application consists of multiple distinct phases in which SYCL is used, and multiple launches of the runtime occur.
-* `ACPP_RT_MAX_CACHED_NODES`: Maximum number of nodes that the runtime buffers before flushing work.
 * `ACPP_SSCP_FAILED_IR_DUMP_DIRECTORY`: If non-empty, hipSYCL will dump the IR of code that fails SSCP JIT into this directory.
 * `ACPP_RT_GC_TRIGGER_BATCH_SIZE`: Number of nodes in flight that trigger a garbage collection job to be spawned
 * `ACPP_RT_OCL_NO_SHARED_CONTEXT`: If set to `1`, instructs the OpenCL backend to not attempt to construct a shared context across devices within a platform. This can be necessary on OpenCL implementations that do not support this. Note that if shared contexts are unavailable, support for data transfers between devices might be limited as the devices can no longer directly talk to each other.
@@ -28,11 +27,17 @@
 * `ACPP_STDPAR_OHC_MIN_TIME`: stdpar offload heuristic configuration (ohc): If set, offloading decisions will only be reevaluated after at least this much time in seconds has passed.
 * `ACPP_RT_NO_JIT_CACHE_POPULATION`: If set to `1`, prevents the kernel cache from storing SSCP JIT-compiled binaries in the persistent on-disk cache. This can be useful e.g. in an MPI context, where it is sufficient that only one process among many populates the cache.
 * `ACPP_ADAPTIVITY_LEVEL`: Controls the optimization level of the adaptivity engine. This is currently only relevant for the generic SSCP target. A higher value implies JIT-compiling more specialized kernels at the expense of more frequent JIT compilations. A value of 0 disables all adaptivity (not recommended). The default is 1; the maximum implemented adaptivity level is 2.
-* `ACPP_APPDB_DIR`: By default, AdaptiveCpp stores its application db (which in particular includes the per-app JIT cache) in `$HOME/.acpp`. This environment variable can be used to override the location.
+* `ACPP_APPDB_DIR`: By default, AdaptiveCpp stores its application db (which in particular includes the per-app JIT cache) in `$HOME/.acpp` on Linux/macOS and in `%LOCALAPPDATA%\acpp` on Windows. This environment variable can be used to override the location.
 * `ACPP_JITOPT_IADS_RELATIVE_THRESHOLD`: JIT-time optimization *invariant argument detection & specialization* (active if `ACPP_ADAPTIVITY_LEVEL >= 2`): When the same argument has been passed into the kernel for this fraction of all invocations of the kernel, a new kernel will be JIT-compiled with the argument value hard-wired as constant. Not taken into account for the first application run. Default: 0.8.
 * `ACPP_JITOPT_IADS_RELATIVE_THRESHOLD_MIN_DATA`: JIT-time optimization *invariant argument detection & specialization* (active if `ACPP_ADAPTIVITY_LEVEL >= 2`): Only consider kernels with at least many invocations for the relative threshold described above. Default: 1024.
 * `ACPP_JITOPT_IADS_RELATIVE_EVICTION_THRESHOLD`: JIT-time optimization *invariant argument detection & specialization* (active if `ACPP_ADAPTIVITY_LEVEL >= 2`): If the relative frequency of a kernel argument value falls below this threshold, the statistics entry for the the argument value may be evicted if space for other values is needed.
 * `ACPP_ALLOCATION_TRACKING`: If set to 1, allows the AdaptiveCpp runtime to track and register the allocations that it manages. This enables additional JIT-time optimizations. Set to 0 to disable. (Default: 0)
+* `ACPP_JITOPT_HOST_VECTOR_MATH_LIBRARY`: If set, override the default vector math library to be used during JIT compilation. Allowed values:
+  * `none`: Disable usage of vector math library.
+  * `libmvec`: Use GNU libmvec vectorized libm implementation (Only available on x86_64 if LLVM version < 21).
+  * `svml`: Use Intel SVML.
+  * `sleef`: Use SLEEF.
+  * `armpl`: Use amath from Arm Performance Libraries.
 
 ## Environment variables to control dumping IR during JIT compilation
 
@@ -76,4 +81,23 @@ In general, the dump file will contain multiple dump sections if dumping is enab
 If `ACPP_S2_DUMP_IR_FILTER` filter is non-empty, AdaptiveCpp will only dump IR if the kernel identifier corresponds to the one specified in this variable.
 Note that this can still lead to multiple JIT compilation dumps, e.g. if AdaptiveCpp generates multiple specialized kernels based on runtime information for one C++ kernel.
 
+
+## Configuration files
+
+All environment variables for the runtime (not JIT compiler) can also be set in a configuration file. This configuration file must be placed in the same directory as your program.
+
+1. First, AdaptiveCpp will attempt to read `acpp-config.cfg`.
+2. Next, it reads `acpp-config-<app-name>.cfg`, where `app-name` is the full filename of your program (including file extension if you are on a platform that uses an extension for programs). If some variable was already set from `acpp-config.cfg`, it will be overwritten.
+
+This allows users to specify a global behavior for all programs located in a directory, and special-case the behavior for individual programs using `acpp-config-<app-name>.cfg` files.
+
+When there are conflicting environment variables and entries in the config file, environment variables take precedence.
+
+The content of the configuration file is comprised of `<environment-variable>=<value>` entries, one per line.
+
+Example:
+```
+ACPP_DEBUG_LEVEL=0
+ACPP_ADAPTIVITY_LEVEL=2
+```
 

@@ -20,6 +20,7 @@
 #include "msgpack/msgpack.hpp"
 
 #include "hipSYCL/runtime/kernel_configuration.hpp"
+#include "export.hpp"
 
 namespace hipsycl::common::db {
 
@@ -29,7 +30,7 @@ struct kernel_arg_value_statistics {
   uint64_t last_used = 0; // The number of the kernel invocation where this value
                       // was last used
 
-  void dump(std::ostream& ostr, int indentation_level=0) const;
+  ACPP_COMMON_EXPORT void dump(std::ostream& ostr, int indentation_level=0) const;
 
   template<class T>
   void pack(T &pack) {
@@ -51,7 +52,7 @@ struct kernel_arg_entry {
     pack(was_specialized);
   }
 
-  void dump(std::ostream& ostr, int indentation_level=0) const;
+  ACPP_COMMON_EXPORT void dump(std::ostream& ostr, int indentation_level=0) const;
 };
 
 struct kernel_entry {
@@ -61,14 +62,16 @@ struct kernel_entry {
     pack(kernel_args);
     pack(num_registered_invocations);
     pack(retained_argument_indices);
+    pack(is_free_of_indirect_access);
     pack(first_iads_invocation_run);
   }
 
-  void dump(std::ostream& ostr, int indentation_level=0) const;
+  ACPP_COMMON_EXPORT void dump(std::ostream& ostr, int indentation_level=0) const;
 
   std::vector<kernel_arg_entry> kernel_args;
   std::size_t num_registered_invocations = 0;
   std::vector<int> retained_argument_indices;
+  bool is_free_of_indirect_access = false;
 
   // It seems there is a bug in msgpack serializing
   // std::numeric_limits<size_t>::max(). So we use 1 << 63
@@ -85,7 +88,18 @@ struct binary_entry {
     pack(jit_cache_filename);
   }
 
-  void dump(std::ostream& ostr, int indentation_level=0) const;
+  ACPP_COMMON_EXPORT void dump(std::ostream& ostr, int indentation_level=0) const;
+};
+
+struct scheduling_object_entry {
+  bool is_free_of_indirect_access = false;
+
+  template<class T>
+  void pack(T &pack) {
+    pack(is_free_of_indirect_access);
+  }
+
+  ACPP_COMMON_EXPORT void dump(std::ostream& ostr, int indentation_level=0) const;
 };
 
 struct appdb_data {
@@ -97,23 +111,27 @@ struct appdb_data {
   std::unordered_map<rt::kernel_configuration::id_type, binary_entry,
                      rt::kernel_id_hash>
       binaries;
+  std::unordered_map<rt::kernel_configuration::id_type, scheduling_object_entry,
+                     rt::kernel_id_hash>
+      scheduling_objects;
 
   template<class T>
   void pack(T &pack) {
     pack(kernels);
     pack(binaries);
+    pack(scheduling_objects);
     pack(content_version);
   }
 
-  void dump(std::ostream& ostr, int indentation_level=0) const;
+  ACPP_COMMON_EXPORT void dump(std::ostream& ostr, int indentation_level=0) const;
 };
 
 
-class appdb  {
+class ACPP_COMMON_EXPORT appdb  {
 public:
   // DO NOT FORGET TO INCREMENT THIS WHEN ADDING/REMOVING
   // FIELDS OR OTHERWISE CHANGING THE DATA LAYOUT!
-  static const uint64_t format_version = 4;
+  static const uint64_t format_version = 5;
 
   appdb(const std::string& db_path);
   ~appdb();

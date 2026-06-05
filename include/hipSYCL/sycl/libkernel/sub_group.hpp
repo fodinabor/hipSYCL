@@ -18,15 +18,11 @@
 #include "id.hpp"
 #include "memory.hpp"
 #include "range.hpp"
-#include "hipSYCL/RV.h"
 
 #ifdef ACPP_LIBKERNEL_IS_DEVICE_PASS_SSCP
 #include "sscp/builtins/subgroup.hpp"
 #endif
 
-#if USE_RV
-#include "host/rv.h"
-#endif
 
 constexpr size_t SGSize = 32;
 
@@ -72,9 +68,12 @@ public:
   // always returns the maximum sub_group size
   ACPP_KERNEL_TARGET
   linear_range_type get_local_linear_range() const {
-    __acpp_backend_switch(return 1, return __acpp_sscp_get_subgroup_size(),
-                                 // TODO This is not actually correct for incomplete subgroups
-                                 return __acpp_warp_size, return __acpp_warp_size);
+    __acpp_backend_switch(
+        return 1,
+        return __acpp_sscp_get_subgroup_size(),
+        // TODO This is not actually correct for incomplete subgroups
+        return hiplike_get_subgroup_size(),
+        return hiplike_get_subgroup_size());
   }
 
   ACPP_KERNEL_TARGET
@@ -126,6 +125,24 @@ private:
   }
 
   ACPP_KERNEL_TARGET
+  int hiplike_get_subgroup_size() const {
+    __acpp_if_target_hiplike(
+      if (get_group_linear_id() ==
+          hiplike_num_subgroups() - 1) {
+        auto wg_size = __acpp_lsize_x *
+          __acpp_lsize_y * __acpp_lsize_z;
+
+        auto num_max_sized_subgroups = hiplike_num_subgroups() - 1;
+        return wg_size -
+               num_max_sized_subgroups * __acpp_warp_size;
+      } else {
+        return __acpp_warp_size;
+      }
+    );
+    return 0;
+  }
+
+  ACPP_KERNEL_TARGET
   int local_tid() const {
     __acpp_if_target_device(int tid = __acpp_lid_x + __acpp_lid_y * __acpp_lsize_x +
                                       __acpp_lid_z * __acpp_lsize_x * __acpp_lsize_y;
@@ -156,11 +173,7 @@ public:
 
   HIPSYCL_KERNEL_TARGET
   linear_id_type get_local_linear_id() const {
-#if USE_RV
-    return rv_lane_id();
-#else
     return __acpp_cbs_local_id_subgroup;
-#endif
   }
 
   // always returns the maximum sub_group size
@@ -170,11 +183,7 @@ public:
   // always returns the maximum sub_group size
   HIPSYCL_KERNEL_TARGET
   linear_range_type get_local_linear_range() const {
-#if USE_RV
-    return rv_num_lanes();
-#else
     return __acpp_cbs_subgroup_size;
-#endif
   }
 
   HIPSYCL_KERNEL_TARGET
@@ -187,11 +196,7 @@ public:
 
   HIPSYCL_KERNEL_TARGET
   linear_id_type get_group_linear_id() const {
-#if USE_RV
-    return rv_is_uniform(__acpp_cbs_id_subgroup);
-#else
     return __acpp_cbs_id_subgroup;
-#endif
   }
 
   HIPSYCL_KERNEL_TARGET

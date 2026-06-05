@@ -3,7 +3,22 @@
   --md-accent-fg-color: #c50d29;
 }
 
+:root .md-typeset :is(h1, h2, h3, h4, h5, h6) {
+  color: #000000;
+}
+
 [data-md-color-scheme="slate"] {
   --md-primary-fg-color: #c50d29;
   --md-accent-fg-color: #c50d29;
+  --md-default-fg-color: #ffffff;
+  --md-typeset-color: #ffffff;
+  --md-code-fg-color: #ffffff;
+}
+
+[data-md-color-scheme="slate"] .md-typeset :is(h1, h2, h3, h4, h5, h6) {
+  color: #ffffff;
+}
+
+.md-nav__source {
+  background-color: #c50d29;
 }

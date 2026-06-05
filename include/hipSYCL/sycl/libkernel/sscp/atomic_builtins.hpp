@@ -20,6 +20,7 @@
 #if ACPP_LIBKERNEL_IS_DEVICE_PASS_SSCP
 
 #include "builtins/atomic.hpp"
+#include "builtins/barrier.hpp"
 
 namespace hipsycl {
 namespace sycl {
@@ -37,7 +38,7 @@ HIPSYCL_BUILTIN void __acpp_atomic_store(T *addr, T x, memory_order order,
   } else if constexpr (sizeof(T) == 2) {
     __acpp_sscp_atomic_store_i16(S, order, scope,
                                     reinterpret_cast<__acpp_int16 *>(addr),
-                                    __builtin_bit_cast(__acpp_int8, x));
+                                    __builtin_bit_cast(__acpp_int16, x));
   } else if constexpr (sizeof(T) == 4) {
     __acpp_sscp_atomic_store_i32(S, order, scope,
                                     reinterpret_cast<__acpp_int32 *>(addr),
@@ -464,7 +465,10 @@ HIPSYCL_BUILTIN double __acpp_atomic_fetch_max(double *addr, double x,
   return __acpp_sscp_atomic_fetch_max_f64(S, order, scope, addr, x);
 }
 
-
+HIPSYCL_BUILTIN void __acpp_atomic_fence(memory_order order,
+                                         memory_scope scope) noexcept {
+  __acpp_sscp_memory_fence(scope, order);
+}
 
 #undef return_cast
 

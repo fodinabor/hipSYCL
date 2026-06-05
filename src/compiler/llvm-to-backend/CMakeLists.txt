@@ -1,13 +1,13 @@
 
-set(LLVM_TO_BACKEND_INCLUDE_DIRS 
+set(LLVM_TO_BACKEND_INCLUDE_DIRS
   ../../../include
   ${CMAKE_CURRENT_SOURCE_DIR}
-  ${CMAKE_BINARY_DIR}/include)
+  ${ACPP_BINARY_ROOT}/include)
 
 set(CMAKE_INSTALL_RPATH ${base} ${base}/../../)
 
 function(create_llvm_based_library)
-  set(options)
+  set(options STATIC)
   set(one_value_keywords TARGET)
   set(multi_value_keywords SOURCES)
   cmake_parse_arguments(CREATE_LLVM_LIBRARY
@@ -20,8 +20,13 @@ function(create_llvm_based_library)
   set(target ${CREATE_LLVM_LIBRARY_TARGET})
   set(sources ${CREATE_LLVM_LIBRARY_SOURCES})
 
-  add_library(${target} SHARED
-    ${sources})
+  if(CREATE_LLVM_LIBRARY_STATIC)
+    add_library(${target} STATIC
+      ${sources})
+  else()
+    add_library(${target} SHARED
+      ${sources})
+  endif()
 
   target_include_directories(${target} PRIVATE
     ${LLVM_TO_BACKEND_INCLUDE_DIRS})
@@ -31,15 +36,39 @@ function(create_llvm_based_library)
   target_compile_definitions(${target} PRIVATE
     ${LLVM_DEFINITIONS_LIST})
   target_compile_definitions(${target} PRIVATE -DHIPSYCL_COMPILER_COMPONENT)
-  find_library(LLVM_LIBRARY NAMES LLVM LLVM-${LLVM_VERSION_MAJOR} HINTS ${LLVM_LIBRARY_DIRS} NO_DEFAULT_PATH)
-  if(NOT LLVM_LIBRARY)
-    message(FATAL_ERROR "LLVM at ${LLVM_DIR} does not have libLLVM.so. Please disable SSCP and related backends (-DWITH_SSCP_COMPILER=OFF -DWITH_OPENCL_BACKEND=OFF -DWITH_LEVEL_ZERO_BACKEND=OFF) or choose another LLVM installation")
+
+  if(NOT ACPP_LLVM_COMPONENT)
+    find_library(LLVM_LIBRARY NAMES LLVM LLVM-${LLVM_VERSION_MAJOR} HINTS ${LLVM_LIBRARY_DIRS} NO_DEFAULT_PATH)
+    if(NOT LLVM_LIBRARY)
+      message(FATAL_ERROR "LLVM at ${LLVM_DIR} does not have libLLVM.so. Disable advanced compiler-based functionality (-DACPP_COMPILER_FEATURE_PROFILE=minimal, not recommended for most use cases) or choose another LLVM installation")
+    endif()
+  elseif(NOT LLVM_BUILD_LLVM_DYLIB AND NOT WIN32)
+    message(FATAL_ERROR "LLVM is not configured to build libLLVM.so. Please disable reconfigure with LLVM_BUILD_LLVM_DYLIB and LLVM_LINK_LLVM_DYLIB.")
   endif()
-  llvm_config(${target} USE_SHARED core support irreader passes)
+  if(WIN32)
+    llvm_config(${target} core support irreader passes)
+  else()
+    llvm_config(${target} USE_SHARED core support irreader passes)
+  endif()
   # We need symbolic functions for stdpar
   target_link_libraries(${target} PRIVATE ${HIPSYCL_STDPAR_RT_LINKER_FLAGS})
 
-  install(TARGETS ${target} DESTINATION lib/hipSYCL/llvm-to-backend)
+  if(NOT LLVM_ENABLE_EH)
+    target_compile_options(${target} PRIVATE -fno-exceptions)
+  endif()
+  if(NOT LLVM_ENABLE_RTTI)
+    target_compile_options(${target} PRIVATE -fno-rtti)
+  endif()
+
+  if(ACPP_LLVM_COMPONENT)
+    add_dependencies(${target} intrinsics_gen)
+  endif()
+
+  set(install_subdir hipSYCL/llvm-to-backend)
+  install(TARGETS ${target}
+    RUNTIME DESTINATION bin/${install_subdir}
+    LIBRARY DESTINATION lib/${install_subdir}
+    ARCHIVE DESTINATION lib/${install_subdir})
 endfunction()
 
 function(create_llvm_to_backend_library)
@@ -56,8 +85,11 @@ function(create_llvm_to_backend_library)
   set(target ${CREATE_LLVM_LIBRARY_TARGET})
   set(sources ${CREATE_LLVM_LIBRARY_SOURCES})
 
-  create_llvm_based_library(TARGET ${target} SOURCES ${sources})
-  target_link_libraries(${target} PUBLIC llvm-to-backend acpp-common)
+  if(WIN32)
+  set(MODE STATIC)
+  endif()
+  create_llvm_based_library(TARGET ${target} ${MODE} SOURCES ${sources})
+  target_link_libraries(${target} PUBLIC llvm-to-backend)
 endfunction()
 
 function(create_llvm_to_backend_tool)
@@ -73,7 +105,7 @@ function(create_llvm_to_backend_tool)
 
   set(target ${CREATE_LLVM_TOOL_TARGET})
   set(sources ${CREATE_LLVM_TOOL_SOURCES})
- 
+
   add_executable(${target}-tool ${sources})
 
   target_include_directories(${target}-tool PRIVATE
@@ -86,7 +118,11 @@ function(create_llvm_to_backend_tool)
   target_compile_definitions(${target}-tool PRIVATE -DHIPSYCL_TOOL_COMPONENT)
   target_link_libraries(${target}-tool PRIVATE ${target})
 
-  install(TARGETS ${target}-tool DESTINATION lib/hipSYCL/llvm-to-backend)
+  set(install_subdir hipSYCL/llvm-to-backend)
+  install(TARGETS ${target}-tool
+    RUNTIME DESTINATION bin/${install_subdir}
+    LIBRARY DESTINATION lib/${install_subdir}
+    ARCHIVE DESTINATION lib/${install_subdir})
 endfunction()
 
 function(add_hipsycl_llvm_backend)
@@ -111,10 +147,14 @@ endfunction()
 include(ExternalProject)
 
 if(WITH_SSCP_COMPILER)
+  if(WIN32)
+    set(MODE STATIC)
+  endif()
   create_llvm_based_library(
+    ${MODE}
     TARGET llvm-to-backend
-    SOURCES 
-      LLVMToBackend.cpp 
+    SOURCES
+      LLVMToBackend.cpp
       AddressSpaceInferencePass.cpp
       KnownGroupSizeOptPass.cpp
       KnownPtrParamAlignmentOptPass.cpp
@@ -122,12 +162,21 @@ if(WITH_SSCP_COMPILER)
       GlobalInliningAttributorPass.cpp
       DeadArgumentEliminationPass.cpp
       ProcessS2ReflectionPass.cpp
-      ../sscp/KernelOutliningPass.cpp)
+      ../sscp/KernelOutliningPass.cpp
+      Utils.cpp
+      )
+
+  target_compile_definitions(llvm-to-backend PRIVATE
+    -DACPP_CLANG_PATH="${CLANG_INSTALLED_PATH}"
+  )
+  target_link_libraries(llvm-to-backend PUBLIC
+    acpp-common
+  )
 
   if(WITH_LLVM_TO_SPIRV)
     add_hipsycl_llvm_backend(
-      BACKEND spirv 
-      LIBRARY spirv/LLVMToSpirv.cpp 
+      BACKEND spirv
+      LIBRARY spirv/LLVMToSpirv.cpp
       TOOL spirv/LLVMToSpirvTool.cpp)
 
     # Install LLVM-SPIRV translator for llvm-to-spirv
@@ -137,61 +186,80 @@ if(WITH_SSCP_COMPILER)
     set(LLVMSPIRV_RELATIVE_INSTALLDIR lib/hipSYCL/ext/llvm-spirv)
     set(LLVMSPIRV_INSTALLDIR ${CMAKE_INSTALL_PREFIX}/${LLVMSPIRV_RELATIVE_INSTALLDIR})
     set(LLVMSPIRV_PATH ${LLVMSPIRV_INSTALLDIR}/bin/llvm-spirv)
-    set(LLVMSPIRV_RELATIVE_PATH ${LLVMSPIRV_RELATIVE_INSTALLDIR}/bin/llvm-spirv)
+    if(WIN32)
+      set(LLVMSPIRV_EXECUTABLE_NAME "llvm-spirv.exe")
+    else()
+      set(LLVMSPIRV_EXECUTABLE_NAME "llvm-spirv")
+    endif()
+    set(LLVMSPIRV_RELATIVE_PATH ${LLVMSPIRV_RELATIVE_INSTALLDIR}/bin/${LLVMSPIRV_EXECUTABLE_NAME})
 
-    include(FetchContent)
-    FetchContent_Declare(LLVMSpirvTranslator
-      GIT_REPOSITORY https://github.com/KhronosGroup/SPIRV-LLVM-Translator
+    ExternalProject_Add(LLVMSpirvTranslator
+      GIT_REPOSITORY https://github.com/AdaptiveCpp/SPIRV-LLVM-Translator
       GIT_TAG origin/${LLVMSPIRV_BRANCH}
       GIT_SHALLOW ON
+      GIT_REMOTE_UPDATE_STRATEGY CHECKOUT
+      BUILD_ALWAYS OFF
+      BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR}/ext/llvm-spirv
+      CMAKE_ARGS
+        -DCMAKE_C_COMPILER:PATH=${CMAKE_C_COMPILER}
+        -DCMAKE_CXX_COMPILER:PATH=${CMAKE_CXX_COMPILER}
+        -DCMAKE_BUILD_TYPE:STRING=${CMAKE_BUILD_TYPE}
+      CMAKE_CACHE_ARGS
+        -DLLVM_SPIRV_BUILD_EXTERNAL:BOOL=YES
+        -DLLVM_DIR:PATH=${LLVM_DIR}
+        -DCMAKE_INSTALL_PREFIX:PATH=${LLVMSPIRV_INSTALLDIR}
+        -DCMAKE_CXX_FLAGS:STRING=${CMAKE_CXX_FLAGS}
+      BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --config Release --parallel ${ACPP_SUBPROJECT_PARALLEL_JOBS}
+      INSTALL_COMMAND ""
     )
 
-    FetchContent_GetProperties(LLVMSpirvTranslator)
-    if(NOT LLVMSpirvTranslator_POPULATED)
-      FetchContent_Populate(LLVMSpirvTranslator)
-      execute_process(COMMAND patch -N -p0 -c --fuzz=4 --ignore-whitespace -i llvm-spirv.patch ${llvmspirvtranslator_SOURCE_DIR}/lib/SPIRV/SPIRVInternal.h ${CMAKE_CURRENT_SOURCE_DIR}/spirv/llvm-spirv.patch)
-      execute_process(COMMAND ${CMAKE_COMMAND} -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER} -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER} -DLLVM_SPIRV_BUILD_EXTERNAL=ON -DLLVM_DIR=${LLVM_DIR} -DCMAKE_INSTALL_PREFIX=${LLVMSPIRV_INSTALLDIR} -DCMAKE_BUILD_TYPE=Release -S ${llvmspirvtranslator_SOURCE_DIR} -B ${llvmspirvtranslator_BINARY_DIR})
-    endif()
-    
-    add_custom_target(llvm-spirv-translator ALL COMMAND ${CMAKE_COMMAND} --build ${llvmspirvtranslator_BINARY_DIR} --config Release)
-    install(CODE "execute_process(COMMAND ${CMAKE_COMMAND} --install ${llvmspirvtranslator_BINARY_DIR})")
+    add_custom_target(InstallLLVMSpirvTranslator
+      COMMAND ${CMAKE_COMMAND} --build ${CMAKE_CURRENT_BINARY_DIR}/ext/llvm-spirv --target install
+      WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/ext/llvm-spirv
+    )
 
+    #install(TARGETS InstallLLVMSpirvTranslator)
+    install(CODE [[
+      execute_process(COMMAND "${CMAKE_COMMAND}" --build . --target InstallLLVMSpirvTranslator)
+    ]])
+
+    add_dependencies(llvm-to-spirv LLVMSpirvTranslator)
     target_compile_definitions(llvm-to-spirv PRIVATE
+      -DHIPSYCL_LLVMSPIRV_NAME="${LLVMSPIRV_EXECUTABLE_NAME}"
       -DHIPSYCL_RELATIVE_LLVMSPIRV_PATH="${LLVMSPIRV_RELATIVE_PATH}")
-    
-    
+
+
   endif()
 
   if(WITH_LLVM_TO_PTX)
     add_hipsycl_llvm_backend(
-      BACKEND ptx 
-      LIBRARY ptx/LLVMToPtx.cpp 
+      BACKEND ptx
+      LIBRARY ptx/LLVMToPtx.cpp
       TOOL ptx/LLVMToPtxTool.cpp)
 
     target_compile_definitions(llvm-to-ptx PRIVATE
-      -DHIPSYCL_CLANG_PATH="${CLANG_EXECUTABLE_PATH}" 
-      -DHIPSYCL_CUDA_PATH="${CUDA_TOOLKIT_ROOT_DIR}")
+      -DHIPSYCL_CUDA_PATH="${CUDA_TOOLKIT_ROOT_DIR}"
+      -DACPP_CUDA_DEVICE_LIBS_PATH="${CUDA_DEVICE_LIBS_PATH}")
   endif()
 
   if(WITH_LLVM_TO_AMDGPU_AMDHSA)
     add_hipsycl_llvm_backend(
-      BACKEND amdgpu 
-      LIBRARY amdgpu/LLVMToAmdgpu.cpp 
+      BACKEND amdgpu
+      LIBRARY amdgpu/LLVMToAmdgpu.cpp
       TOOL amdgpu/LLVMToAmdgpuTool.cpp)
 
     target_compile_definitions(llvm-to-amdgpu PRIVATE
-      -DACPP_ROCM_PATH="${ROCM_PATH}")
-    
+      -DACPP_ROCM_PATH="${ROCM_PATH}"
+      -DACPP_ROCM_DEVICE_LIBS_PATH="${ROCM_DEVICE_LIBS_PATH}")
+
     find_program(HIPCC_PATH hipcc HINTS ${ROCM_PATH}/bin)
     if(HIPCC_PATH)
       target_compile_definitions(llvm-to-amdgpu PRIVATE
         -DACPP_HIPCC_PATH="${HIPCC_PATH}")
     endif()
-    target_compile_definitions(llvm-to-amdgpu PRIVATE
-        -DACPP_CLANG_PATH="${CLANG_EXECUTABLE_PATH}")
 
     find_library(HIPRTC_LIBRARY hiprtc HINTS ${ROCM_PATH}/lib)
-   
+
     if(HIPRTC_LIBRARY)
       message(STATUS "Found hipRTC: ${HIPRTC_LIBRARY}")
 
@@ -206,27 +274,50 @@ if(WITH_SSCP_COMPILER)
   if(WITH_LLVM_TO_HOST)
     include(CheckCXXCompilerFlag)
 
-    check_cxx_compiler_flag(-mcpu=native HAS_MCPU_NATIVE)
-    check_cxx_compiler_flag(-march=native HAS_MARCH_NATIVE)
+    # TODO We assume that if clang -mcpu/march=native works, llc -mcpu=native works too.
+    # We should actually check llc/opt here!
+    if(NOT ACPP_HOST_FORCE_MCPU_TARGET)
+      check_cxx_compiler_flag(-mcpu=native HAS_MCPU_NATIVE)
+      check_cxx_compiler_flag(-march=native HAS_MARCH_NATIVE)
 
-    if(HAS_MARCH_NATIVE)
-      set(HOST_CPU_FLAG -march=native)
-    elseif(HAS_MCPU_NATIVE)
-      set(HOST_CPU_FLAG -mcpu=native)
+      if(HAS_MCPU_NATIVE OR HAS_MARCH_NATIVE)
+        set(HOST_LLC_CPU_FLAG -mcpu=native)
+        set(HOST_OPT_CPU_FLAG --mcpu=native)
+      else()
+        set(HOST_LLC_CPU_FLAG "")
+        set(HOST_OPT_CPU_FLAG "")
+        message(SEND_ERROR "Could not determine that llc -mcpu=native works. Please provide the CPU that AdaptiveCpp should target at JIT-time using -DACPP_HOST_FORCE_MCPU_TARGET")
+      endif()
     else()
-      set(HOST_CPU_FLAG "")
-      message(WARNING "Could not find -mcpu=native or -march=native. Host code generation may be suboptimal.")
+      set(HOST_LLC_CPU_FLAG "-mcpu=${ACPP_HOST_FORCE_MCPU_TARGET}")
+      set(HOST_OPT_CPU_FLAG "--mcpu=${ACPP_HOST_FORCE_MCPU_TARGET}")
     endif()
+    message(STATUS "llvm-to-host: Using llc compilation flag to target native CPU: ${HOST_LLC_CPU_FLAG}")
 
     add_hipsycl_llvm_backend(
       BACKEND host
-      LIBRARY host/LLVMToHost.cpp host/HostKernelWrapperPass.cpp
+      LIBRARY host/LLVMToHost.cpp host/HostKernelWrapperPass.cpp host/StaticLocalMemoryPass.cpp
       TOOL host/LLVMToHostTool.cpp)
 
     target_compile_definitions(llvm-to-host PRIVATE
-      -DHIPSYCL_CLANG_PATH="${CLANG_EXECUTABLE_PATH}" 
-      -DHIPSYCL_HOST_CPU_FLAG="${HOST_CPU_FLAG}")
+      -DACPP_LLC_HOST_CPU_FLAG="${HOST_LLC_CPU_FLAG}"
+      -DACPP_OPT_HOST_CPU_FLAG="${HOST_OPT_CPU_FLAG}"
+      -DACPP_LLC_ADDITIONAL_FLAGS="${HOST_ADDITIONAL_LLC_FLAGS}"
+      -DACPP_OPT_ADDITIONAL_FLAGS="${HOST_ADDITIONAL_OPT_FLAGS}")
     target_link_libraries(llvm-to-host PRIVATE acpp-clang-cbs)
+  endif()
+
+  if(WITH_LLVM_TO_METAL)
+    add_hipsycl_llvm_backend(
+      BACKEND metal
+      LIBRARY
+        metal/LLVMToMetal.cpp
+        metal/HLExtractionPass.cpp
+        metal/PointerTranslationAnnotationPass.cpp
+        metal/PointerTranslationPass.cpp
+        metal/HLTree.cpp
+        metal/Emitter.cpp
+      TOOL metal/LLVMToMetalTool.cpp)
   endif()
 
 endif()
