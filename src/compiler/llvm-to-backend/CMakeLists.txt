@@ -86,7 +86,7 @@ function(create_llvm_to_backend_library)
   set(sources ${CREATE_LLVM_LIBRARY_SOURCES})
 
   if(WIN32)
-  set(MODE STATIC)
+    set(MODE STATIC)
   endif()
   create_llvm_based_library(TARGET ${target} ${MODE} SOURCES ${sources})
   target_link_libraries(${target} PUBLIC llvm-to-backend)
@@ -227,8 +227,6 @@ if(WITH_SSCP_COMPILER)
     target_compile_definitions(llvm-to-spirv PRIVATE
       -DHIPSYCL_LLVMSPIRV_NAME="${LLVMSPIRV_EXECUTABLE_NAME}"
       -DHIPSYCL_RELATIVE_LLVMSPIRV_PATH="${LLVMSPIRV_RELATIVE_PATH}")
-
-
   endif()
 
   if(WITH_LLVM_TO_PTX)
@@ -318,6 +316,24 @@ if(WITH_SSCP_COMPILER)
         metal/HLTree.cpp
         metal/Emitter.cpp
       TOOL metal/LLVMToMetalTool.cpp)
+  endif()
+
+  if(WITH_LLVM_TO_VULKAN)
+    add_hipsycl_llvm_backend(
+      BACKEND clspv
+      LIBRARY clspv/LLVMToCLSPV.cpp
+      clspv/AddrSpaceCastRemovalPass.cpp
+      clspv/FoldChainedGEPsPass.cpp
+      clspv/RemoveUnusedIntrinsicsPass.cpp
+      clspv/MemsetLoweringPass.cpp
+      clspv/ConstantAddrSpacePass.cpp
+      TOOL clspv/LLVMToCLSPVTool.cpp)
+
+    find_program(CLSPV_COMPILER NAMES clspv REQUIRED)
+
+    message(STATUS "Using clspv at: ${CLSPV_COMPILER}")
+    target_compile_definitions(llvm-to-clspv PRIVATE
+      -DHIPSYCL_CLSPV_PATH="${CLSPV_COMPILER}")
   endif()
 
 endif()

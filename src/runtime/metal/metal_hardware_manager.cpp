@@ -290,6 +290,10 @@ std::size_t metal_hardware_context::get_max_memcpy_concurrency() const {
   return 1; // TODO
 }
 
+MTL::Device* metal_hardware_context::get_mtl_device() const {
+  return _device;
+}
+
 std::string metal_hardware_context::get_device_name() const {
   return _device->name()->utf8String();
 }
@@ -348,6 +352,8 @@ bool metal_hardware_context::has(device_support_aspect aspect) const {
   case device_support_aspect::fp64:
     return false;
   case device_support_aspect::atomic64:
+    return false;
+  case device_support_aspect::free_memory:
     return false;
   default:
     return false;
@@ -481,6 +487,9 @@ std::size_t metal_hardware_context::get_property(device_uint_property prop) cons
   case P::queue_priority_range_low:
     return 0;
   case P::queue_priority_range_high:
+    return 0;
+
+  case device_uint_property::free_memory:
     return 0;
 
   default:

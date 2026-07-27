@@ -1404,6 +1404,24 @@ BOOST_AUTO_TEST_CASE(target_numa_node_property) {
 
 }
 #endif
+#if defined(ACPP_EXT_DEVICE_FREE_MEMORY)
+BOOST_AUTO_TEST_CASE(device_free_memory)
+{
+  sycl::queue q;
+  sycl::device dev = q.get_device();
+
+  if(dev.has(sycl::aspect::AdaptiveCpp_free_memory)) {
+    auto free_memory =
+        dev.get_info<sycl::info::device::AdaptiveCpp_free_memory>();
+
+    (void)free_memory;
+  } else {
+    BOOST_CHECK_THROW(
+        dev.get_info<sycl::info::device::AdaptiveCpp_free_memory>(),
+        sycl::exception);
+  }
+}
+#endif
 #ifdef SYCL_KHR_DEFAULT_CONTEXT
 BOOST_AUTO_TEST_CASE(khr_default_context) {
   sycl::queue q1;
@@ -1432,5 +1450,35 @@ BOOST_AUTO_TEST_CASE(khr_queue_empty) {
   BOOST_CHECK(in_order_q.khr_empty());
 }
 #endif
+#if defined(ACPP_EXT_GET_NATIVE_ALLOCATION) && defined(SYCL_EXT_ACPP_BACKEND_METAL)
+BOOST_AUTO_TEST_CASE(get_native_allocation) {
+  namespace s = sycl;
+
+  s::queue q;
+  if (q.get_device().get_backend() != s::backend::metal) {
+    BOOST_TEST_MESSAGE("Skipping get_native_allocation: not a Metal device");
+    return;
+  }
+
+  constexpr std::size_t n = 64;
+  int *ptr = s::malloc_device<int>(n, q);
+  BOOST_REQUIRE(ptr != nullptr);
+
+  auto native_allocation =
+      s::get_native_allocation<s::backend::metal>(
+          ptr, q.get_context());
+  BOOST_CHECK(native_allocation.buffer != nullptr);
+  BOOST_CHECK_EQUAL(native_allocation.offset, 0u);
+
+  auto native_allocation_shifted =
+      s::get_native_allocation<s::backend::metal>(
+          ptr + 1, q.get_context());
+  BOOST_CHECK(native_allocation_shifted.buffer == native_allocation.buffer);
+  BOOST_CHECK_EQUAL(native_allocation_shifted.offset, sizeof(int));
+
+  s::free(ptr, q);
+}
+#endif
 
 BOOST_AUTO_TEST_SUITE_END()
+
