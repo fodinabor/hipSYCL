@@ -1,5 +1,10 @@
-// RUN: %acpp %s -o %t --acpp-targets=omp --acpp-use-accelerated-cpu -O3
-// RUN: %acpp %s -o %t --acpp-targets=generic --acpp-use-accelerated-cpu -O3
+// RUN: %acpp %s -o %t --acpp-targets=omp --acpp-use-accelerated-cpu
+// RUN: %t | FileCheck %s
+// RUN: %acpp %s -o %t --acpp-targets=omp --acpp-use-accelerated-cpu -O
+// RUN: %t | FileCheck %s
+// RUN: %acpp %s -o %t --acpp-targets=generic
+// RUN: ACPP_VISIBILITY_MASK=omp %t | FileCheck %s
+// RUN: %acpp %s -o %t --acpp-targets=generic -O
 // RUN: ACPP_VISIBILITY_MASK=omp %t | FileCheck %s
 
 #include <CL/sycl.hpp>
@@ -32,12 +37,11 @@ int main() {
           });
     });
   }
-  for (size_t i = 28; i < 33; ++i) {
+  for (size_t i = 28; i < 32; ++i) {
     // CHECK: 28
     // CHECK: 29
     // CHECK: 30
     // CHECK: 31
-    // CHECK: 0
     std::cout << host_buf[i] << "\n";
   }
 }

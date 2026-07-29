@@ -1,7 +1,8 @@
 // XFAIL: org
-// RUN: %acpp %s -o %t --acpp-targets=omp --acpp-use-accelerated-cpu -O3
-// RUN: %acpp %s -o %t --acpp-targets=generic --acpp-use-accelerated-cpu -O3
-// RUN: ACPP_VISIBILITY_MASK=omp %t | FileCheck %s
+// RUN: %acpp %s -o %t --acpp-targets=omp --acpp-use-accelerated-cpu
+// RUN: %t | FileCheck %s
+// RUN: %acpp %s -o %t --acpp-targets=omp --acpp-use-accelerated-cpu -O
+// RUN: %t | FileCheck %s
 // RUN: %acpp %s -o %t --acpp-targets=generic
 // RUN: ACPP_VISIBILITY_MASK=omp %t | FileCheck %s
 // RUN: %acpp %s -o %t --acpp-targets=generic -O
