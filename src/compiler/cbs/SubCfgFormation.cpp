@@ -1144,7 +1144,7 @@ void SubCFG::fixSingleSubCfgValues(
             HIPSYCL_DEBUG_INFO << "[SubCFG] Rematerialize " << *OPI << " for use in " << I << "\n";
             auto *Clone = OPI->clone();
             Clone->setName(OPI->getName());
-            Clone->insertBefore(I.getIterator());
+            Clone->insertBefore(&I);
             I.replaceUsesOfWith(OPI, Clone);
             continue;
           }
@@ -2004,6 +2004,71 @@ void multiplyFunction(llvm::Function &F, State state) {
   }
 }
 
+// Shared implementation of the CBS transformation for the legacy and the new pass manager.
+void runSubCfgFormation(llvm::Function &F, const hipsycl::compiler::SplitterAnnotationInfo &SAA,
+                        llvm::DominatorTree &DT, llvm::PostDominatorTree &PDT, llvm::LoopInfo &LI,
+                        bool IsSscp) {
+  assert(!llvm::verifyFunction(F, &llvm::outs()));
+
+  State state{.Dim = getRangeDim(F, IsSscp),
+              .SizeT = llvm::IntegerType::getInt64Ty(F.getContext())};
+
+  if (IsSscp) {
+    std::reverse(state.DimName.begin(), state.DimName.begin() + state.Dim);
+    std::reverse(state.LocalSizeGlobalNames.begin(), state.LocalSizeGlobalNames.begin() + state.Dim);
+    std::reverse(state.LocalIdGlobalNames.begin(), state.LocalIdGlobalNames.begin() + state.Dim);
+  }
+
+  const bool hasSubbarriers = utils::hasSubBarriers(F, SAA);
+
+  formSubCfgs(F, LI, DT, PDT, SAA, state);
+
+  if (INCOMPLETE_SGS_OPT && (hasSubbarriers || ALWAYS_CREATE_SUBGROUP_SUB_CFGS)) {
+    multiplyFunction(F, state);
+  }
+
+  if (!IsSscp) {
+    // If we do not use SSCP, then we need to replace localSizes
+    // In SSCP, the LocalSizeGlobalNames are replaced in a later pipeline stage
+    const auto LocalSizes = loadLocalSizesFromAnnotations(F, state);
+    assert(LocalSizes.size() == state.Dim);
+    for (auto i = 0ul; i < state.Dim; ++i) {
+      utils::replaceUsesOfGVWith(F, state.LocalSizeGlobalNames[i], LocalSizes[i], PASS_PREFIX_STR);
+    }
+  }
+
+  llvm::IRBuilder Builder{F.getContext()};
+
+  for (auto i = state.Dim; i < 3; ++i) {
+    utils::replaceUsesOfGVWith(F, state.LocalSizeGlobalNames[i], Builder.getIntN(64, 1), PASS_PREFIX_STR);
+    utils::replaceUsesOfGVWith(F, state.LocalIdGlobalNames[i], Builder.getIntN(64, 0), PASS_PREFIX_STR);
+  }
+
+  for (auto i = 0; i < 3; ++i) {
+    mergeGVLoadsInEntry(F, state.LocalSizeGlobalNames[i]);
+  }
+
+  // SSCP shared memory
+  {
+    Builder.SetInsertPoint(F.getEntryBlock().getFirstNonPHI());
+    {
+      auto* WorkgroupScratchMemoryAlloca = Builder.CreateAlloca(llvm::IntegerType::getInt8Ty(F.getContext()),
+                                               Builder.getIntN(64, 1024 * 1024));
+      WorkgroupScratchMemoryAlloca->setAlignment(llvm::Align(128));
+      utils::replaceUsesOfGVWith(F, cbs::WorkGroupSharedMemory,
+                          WorkgroupScratchMemoryAlloca, PASS_PREFIX_STR);
+    }
+    {
+      auto* SubgroupScratchMemoryAlloca = Builder.CreateAlloca(llvm::IntegerType::getInt8Ty(F.getContext()),
+                                               Builder.getIntN(64, 32 * 1024));
+      SubgroupScratchMemoryAlloca->setAlignment(llvm::Align(128));
+      utils::replaceUsesOfGVWith(F, cbs::SubGroupSharedMemory, SubgroupScratchMemoryAlloca, PASS_PREFIX_STR);
+    }
+  }
+  F.addFnAttr(llvm::Attribute::NoInline);
+  assert(!llvm::verifyFunction(F, &llvm::outs()));
+}
+
 } // namespace
 
 namespace hipsycl::compiler {
@@ -2025,9 +2090,8 @@ bool SubCfgFormationPassLegacy::runOnFunction(llvm::Function &F) {
   auto &PDT = getAnalysis<llvm::PostDominatorTreeWrapperPass>().getPostDomTree();
   auto &LI = getAnalysis<llvm::LoopInfoWrapperPass>().getLoopInfo();
 
-  // The hierarchical CBS implementation only supports the new pass manager
-  // (registerCBSPipeline); this pass is only registered for LLVM < 16.
-  llvm_unreachable("SubCfgFormationPassLegacy is not supported with hierarchical CBS");
+  // The legacy pass manager is only used for the non-SSCP compilation flow.
+  runSubCfgFormation(F, SAA, DT, PDT, LI, /*IsSscp=*/false);
 
   return true;
 }
@@ -2046,66 +2110,7 @@ llvm::PreservedAnalyses SubCfgFormationPass::run(llvm::Function &F,
   auto &PDT = AM.getResult<llvm::PostDominatorTreeAnalysis>(F);
   auto &LI = AM.getResult<llvm::LoopAnalysis>(F);
 
-  assert(!llvm::verifyFunction(F, &llvm::outs()));
-
-  State state{.Dim = getRangeDim(F, IsSscp_),
-              .SizeT = llvm::IntegerType::getInt64Ty(F.getContext())};
-
-  if (IsSscp_) {
-    std::reverse(state.DimName.begin(), state.DimName.begin() + state.Dim);
-    std::reverse(state.LocalSizeGlobalNames.begin(), state.LocalSizeGlobalNames.begin() + state.Dim);
-    std::reverse(state.LocalIdGlobalNames.begin(), state.LocalIdGlobalNames.begin() + state.Dim);
-  }
-
-  const bool hasSubbarriers = utils::hasSubBarriers(F, *SAA);
-
-  formSubCfgs(F, LI, DT, PDT, *SAA, state);
-
-  if (INCOMPLETE_SGS_OPT && (hasSubbarriers || ALWAYS_CREATE_SUBGROUP_SUB_CFGS)) {
-    multiplyFunction(F, state);
-  }
-
-  if (!IsSscp_) {
-    // If we do not use SSCP, then we need to replace localSizes
-    // In SSCP, the LocalSizeGlobalNames are replaced in a later pipeline stage
-    const auto LocalSizes = loadLocalSizesFromAnnotations(F, state);
-    assert(LocalSizes.size() == state.Dim);
-    for (auto i = 0ul; i < state.Dim; ++i) {
-      utils::replaceUsesOfGVWith(F, state.LocalSizeGlobalNames[i], LocalSizes[i], PASS_PREFIX_STR);
-    }
-  }
-
-  llvm::IRBuilder Builder{F.getContext()};
-
-  for (auto i = state.Dim; i < 3; ++i) {
-    utils::replaceUsesOfGVWith(F, state.LocalSizeGlobalNames[i], Builder.getIntN(64, 1), PASS_PREFIX_STR);
-    utils::replaceUsesOfGVWith(F, state.LocalIdGlobalNames[i], Builder.getIntN(64, 0), PASS_PREFIX_STR);
-  }
-
-  for (auto i = 0; i < 3; ++i) {
-    mergeGVLoadsInEntry(F, state.LocalSizeGlobalNames[i]);
-  }
-
-
-  // SSCP shared memory
-  {
-    Builder.SetInsertPoint(F.getEntryBlock().getFirstNonPHI());
-    {
-      auto* WorkgroupScratchMemoryAlloca = Builder.CreateAlloca(llvm::IntegerType::getInt8Ty(F.getContext()),
-                                               Builder.getIntN(64, 1024 * 1024));
-      WorkgroupScratchMemoryAlloca->setAlignment(llvm::Align(128));
-      utils::replaceUsesOfGVWith(F, cbs::WorkGroupSharedMemory,
-                          WorkgroupScratchMemoryAlloca, PASS_PREFIX_STR);
-    }
-    {
-      auto* SubgroupScratchMemoryAlloca = Builder.CreateAlloca(llvm::IntegerType::getInt8Ty(F.getContext()),
-                                               Builder.getIntN(64, 32 * 1024));
-      SubgroupScratchMemoryAlloca->setAlignment(llvm::Align(128));
-      utils::replaceUsesOfGVWith(F, cbs::SubGroupSharedMemory, SubgroupScratchMemoryAlloca, PASS_PREFIX_STR);
-    }
-  }
-  F.addFnAttr(llvm::Attribute::NoInline);
-  assert(!llvm::verifyFunction(F, &llvm::outs()));
+  runSubCfgFormation(F, *SAA, DT, PDT, LI, IsSscp_);
 
   llvm::PreservedAnalyses PA;
   PA.preserve<SplitterAnnotationAnalysis>();

@@ -19,7 +19,6 @@
 #include "hipSYCL/compiler/cbs/PHIsToAllocas.hpp"
 #include "hipSYCL/compiler/cbs/RemoveBarrierCalls.hpp"
 #include "hipSYCL/compiler/cbs/SimplifyKernel.hpp"
-#include "hipSYCL/compiler/cbs/RemoveGlobalVars.h"
 #include "hipSYCL/compiler/cbs/SplitterAnnotationAnalysis.hpp"
 #include "hipSYCL/compiler/cbs/SubCfgFormation.hpp"
 #include "hipSYCL/compiler/llvm-to-backend/host/HostKernelWrapperPass.hpp"
@@ -97,9 +96,6 @@ void registerCBSPipeline(llvm::ModulePassManager &MPM, OptLevel Opt, bool IsSscp
     FPM.addPass(LoopsParallelMarkerPass{});
   MPM.addPass(llvm::createModuleToFunctionPassAdaptor(std::move(FPM)));
 
-  // Clean up the CBS pseudo global variables and intrinsics that remain in
-  // leftover, never-called copies of the libkernel functions.
-  MPM.addPass(RemoveGlobalVars{});
   MPM.addPass(llvm::IPSCCPPass{});
   {
     llvm::FunctionPassManager FPM;
