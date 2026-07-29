@@ -468,7 +468,22 @@ ACPP_KERNEL_TARGET T __acpp_exclusive_scan_over_group(
 template <typename V, typename T, typename BinaryOperation>
 ACPP_KERNEL_TARGET T __acpp_exclusive_scan_over_group(
     sub_group g, V x, T init, BinaryOperation binary_op) {
-  return init;
+  V *input = static_cast<V *>(g.get_local_memory_ptr());
+  T *scratch = reinterpret_cast<T *>(static_cast<char *>(g.get_local_memory_ptr()) +
+                                     g.get_local_linear_range() * sizeof(V));
+  const size_t lid = g.get_local_linear_id();
+
+  input[lid] = x;
+  __acpp_group_barrier(g);
+
+  detail::__acpp_leader_exclusive_scan(g, input, input + g.get_local_linear_range(), scratch,
+                                       init, binary_op);
+  __acpp_group_barrier(g);
+
+  T tmp = scratch[lid];
+  __acpp_group_barrier(g);
+
+  return tmp;
 }
 
 template <typename Group, typename T, typename BinaryOperation,
@@ -522,7 +537,22 @@ ACPP_KERNEL_TARGET T __acpp_inclusive_scan_over_group(
 template <typename V, typename T, typename BinaryOperation>
 ACPP_KERNEL_TARGET T __acpp_inclusive_scan_over_group(
     sub_group g, V x, BinaryOperation binary_op, T init) {
-  return binary_op(init, x);
+  V *input = static_cast<V *>(g.get_local_memory_ptr());
+  T *scratch = reinterpret_cast<T *>(static_cast<char *>(g.get_local_memory_ptr()) +
+                                     g.get_local_linear_range() * sizeof(V));
+  const size_t lid = g.get_local_linear_id();
+
+  input[lid] = x;
+  __acpp_group_barrier(g);
+
+  detail::__acpp_leader_inclusive_scan(g, input, input + g.get_local_linear_range(), scratch,
+                                       binary_op, init);
+  __acpp_group_barrier(g);
+
+  T tmp = scratch[lid];
+  __acpp_group_barrier(g);
+
+  return tmp;
 }
 
 template <typename Group, typename T, typename BinaryOperation,
