@@ -27,7 +27,7 @@ template <typename T, typename V> T wg_broadcast(__acpp_int32 sender, T x, V shr
 
   if (sender == __acpp_sscp_typed_get_local_linear_id<3, int>()) {
     shrd_memory[0] = x;
-  }
+  };
   __acpp_sscp_work_group_barrier(__acpp_sscp_memory_scope::work_group,
                                  __acpp_sscp_memory_order::acq_rel);
   x = shrd_memory[0];

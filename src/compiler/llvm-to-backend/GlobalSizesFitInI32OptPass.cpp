@@ -81,7 +81,7 @@ llvm::PreservedAnalyses GlobalSizesFitInI32OptPass::run(llvm::Module &M,
   static const char* IfFitsInIntBuiltinName = "__acpp_sscp_if_global_sizes_fit_in_int";
   if(auto* F = M.getFunction(IfFitsInIntBuiltinName)) {
     // Add definition
-    if(F->empty()) {
+    if(F->size() == 0) {
       llvm::BasicBlock *BB =
           llvm::BasicBlock::Create(M.getContext(), "", F);
       llvm::ReturnInst::Create(

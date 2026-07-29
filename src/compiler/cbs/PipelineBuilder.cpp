@@ -64,23 +64,20 @@ void registerCBSPipeline(llvm::ModulePassManager &MPM, OptLevel Opt, bool IsSscp
 
   llvm::FunctionPassManager FPM;
   FPM.addPass(LoopSplitterInliningPass{});
+  FPM.addPass(KernelFlatteningPass{});
+  FPM.addPass(SimplifyKernelPass{});
+  MPM.addPass(llvm::createModuleToFunctionPassAdaptor(std::move(FPM)));
 
-    FPM.addPass(KernelFlatteningPass{});
-    FPM.addPass(SimplifyKernelPass{});
+  MPM.addPass(llvm::IPSCCPPass{});
 
-    MPM.addPass(llvm::createModuleToFunctionPassAdaptor(std::move(FPM)));
-    FPM = llvm::FunctionPassManager{};
-
-    MPM.addPass(llvm::IPSCCPPass{});
-    FPM.addPass(llvm::InstCombinePass{});
-
+  FPM = llvm::FunctionPassManager{};
+  FPM.addPass(llvm::InstCombinePass{});
 #if (LLVM_VERSION_MAJOR < 16) || defined(IS_ROCM_CLANG_VERSION_5_5_0)
-    FPM.addPass(llvm::SROAPass{});
+  FPM.addPass(llvm::SROAPass{});
 #else
-    FPM.addPass(llvm::SROAPass{llvm::SROAOptions::ModifyCFG});
+  FPM.addPass(llvm::SROAPass{llvm::SROAOptions::ModifyCFG});
 #endif
-
-    FPM.addPass(llvm::SimplifyCFGPass{});
+  FPM.addPass(llvm::SimplifyCFGPass{});
 
   FPM.addPass(SimplifyKernelPass{});
 #ifdef HIPSYCL_NO_PHIS_IN_SPLIT
@@ -98,15 +95,17 @@ void registerCBSPipeline(llvm::ModulePassManager &MPM, OptLevel Opt, bool IsSscp
     FPM.addPass(KernelFlatteningPass{});
   if (Opt != OptLevel::O0)
     FPM.addPass(LoopsParallelMarkerPass{});
-  
   MPM.addPass(llvm::createModuleToFunctionPassAdaptor(std::move(FPM)));
+
+  // Clean up the CBS pseudo global variables and intrinsics that remain in
+  // leftover, never-called copies of the libkernel functions.
   MPM.addPass(RemoveGlobalVars{});
   MPM.addPass(llvm::IPSCCPPass{});
-   {
-     llvm::FunctionPassManager FPM;
-     FPM.addPass(llvm::InstCombinePass{});
-     MPM.addPass(llvm::createModuleToFunctionPassAdaptor(std::move(FPM)));
-   }
+  {
+    llvm::FunctionPassManager FPM;
+    FPM.addPass(llvm::InstCombinePass{});
+    MPM.addPass(llvm::createModuleToFunctionPassAdaptor(std::move(FPM)));
+  }
 }
 
 } // namespace hipsycl::compiler

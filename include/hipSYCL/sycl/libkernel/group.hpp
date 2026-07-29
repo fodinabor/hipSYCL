@@ -110,8 +110,7 @@ public:
         id_type local_id = {},
         void *local_memory_ptr = nullptr,
         void *sub_group_local_memory_ptr = nullptr,
-		sub_group sub = sub_group{}
-)
+        sub_group sub = sub_group{})
   : _group_id{group_id}, 
     _local_range{local_range}, 
     _num_groups{num_groups},
@@ -127,18 +126,17 @@ public:
     return _local_memory_ptr;
   }
 
-  HIPSYCL_KERNEL_TARGET
-    void *get_sub_group_local_memory_ptr() const
+  ACPP_KERNEL_TARGET
+  void *get_sub_group_local_memory_ptr() const
   {
     return _sub_group_local_memory_ptr;
   }
 
-HIPSYCL_KERNEL_TARGET
-    sub_group get_sub_group() const
+  ACPP_KERNEL_TARGET
+  sub_group get_sub_group() const
   {
     return sub_group{};
   }
-
 #endif
 
   ACPP_KERNEL_TARGET

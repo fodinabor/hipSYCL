@@ -9,10 +9,8 @@
  */
 // SPDX-License-Identifier: BSD-2-Clause
 
-#if 0 // need to merge this finally...
 #include "hipSYCL/sycl/libkernel/sscp/builtins/shuffle.hpp"
 #include "hipSYCL/sycl/libkernel/sscp/builtins/detail/shuffle.hpp"
-
 
 #define SUBGROUP_SIZE_ONE_SHUFLLE(int_size, direction)                                             \
   HIPSYCL_SSCP_CONVERGENT_BUILTIN                                                                  \
@@ -53,4 +51,3 @@ SUBGROUP_SIZE_ONE_SELECT(8)
 SUBGROUP_SIZE_ONE_SELECT(16)
 SUBGROUP_SIZE_ONE_SELECT(32)
 SUBGROUP_SIZE_ONE_SELECT(64)
-#endif

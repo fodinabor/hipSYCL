@@ -152,7 +152,6 @@ class hcf_node:
   def subnodes(self):
     return self._subnodes
 
-
   def make_subnode(self, name):
     n = hcf_node(name, self._nesting_level+1)
     self._subnodes.append(n)
@@ -167,7 +166,6 @@ class hcf_node:
   def values(self):
     return self._key_value_pairs
 
-
   @property
   def name(self):
     return self._node_name
@@ -179,12 +177,10 @@ class hcf_node:
     for k in self._key_value_pairs:
       result += "{}{}={}\n".format(indent,k, self._key_value_pairs[k])
 
-
     for n in self._subnodes:
       result += indent + "{." + n.name + "\n"
       result += str(n)
       result += indent + "}." + n.name + "\n"
-
 
     return result
 
@@ -1003,7 +999,7 @@ class acpp_config:
 
           hip_platform_synonyms      = set(["rocm", "amd", "hip"])
           cuda_platform_synonyms     = set(["nvidia", "cuda"])
-          pure_cpu_platform_synonyms = set(["host", "cpu", "hipcpu", "omp", "rv"])
+          pure_cpu_platform_synonyms = set(["host", "cpu", "hipcpu", "omp"])
 
 
           if platform in hip_platform_synonyms:
@@ -1076,10 +1072,6 @@ class acpp_config:
       return os.path.join(self.acpp_installation_path, "bin", "acpp-clang.dll")
     else:
       return os.path.join(self.acpp_installation_path, "lib", "libacpp-clang.so")
-
-  @property
-  def rv_plugin_path(self):
-    return os.path.join(os.path.dirname(self.clang_path), "..", "lib", "RVPLUG.so")
 
   @property
   def sequential_link_line(self):
@@ -1875,68 +1867,6 @@ class omp_accelerated_invocation:
 
     return linker_args
 
-
-class rv_host:
-
-  @property
-  def unique_name(self):
-    return "rv.host"
-
-  @property
-  def is_integrated_multipass(self):
-    return True
-
-  @property
-  def is_explicit_multipass(self):
-    return not self.is_integrated_multipass
-
-  def __init__(self, config, targets):
-    self._linker_args = config.omp_link_line
-    self._cxx_flags = config.omp_cxx_flags
-
-    if len(targets) != 0:
-      raise RuntimeError("OpenMP backend does not support specifiying target architecture")
-    if not config.has_plugin_cpu_acceleration:
-      raise RuntimeError("Trying to use accelerated CPU variant, but plugin was built without support for it")
-
-    self._clang_path = config.clang_path
-
-  def get_compiler_preference(self):
-    return (self._clang_path, 10)
-
-  def get_host_pass_requirements(self):
-    return {
-      'requires-extended-host-pass' : False,
-      'extended-host-pass-providers' : [],
-      'conflicts' : ['cuda-nvcxx', 'omp.library-only'],
-      'caveats' : []
-    }
-
-  def get_cxx_flags(self):
-    flags = ["-D__ACPP_ENABLE_OMPHOST_TARGET__"]
-    if not sys.platform.startswith("win32"):
-      flags += [
-        "-fplugin=" + config.acpp_plugin_path
-        , "-fpass-plugin=" + config.acpp_plugin_path
-        , "-fplugin=" + config.rv_plugin_path
-        , "-fpass-plugin=" + config.rv_plugin_path
-        , "-DUSE_RV"
-        , "-D__ACPP_USE_ACCELERATED_CPU__"
-      ]
-    flags += self._cxx_flags
-
-    flags += ["-march=native"]
-    flags += ["-fno-unroll-loops"]
-
-    flags += ["-mllvm", "-rv"]
-
-    return flags
-
-  def get_linker_flags(self):
-    linker_args = self._linker_args
-
-    return linker_args
-
 # This is a workaround to have access to a backend
 # that can execute host tasks when compiling for GPUs.
 # It should be removed once we have non-OpenMP host backends
@@ -2117,8 +2047,6 @@ class compiler:
           self._backends.append(omp_accelerated_invocation(config, config.targets["omp"]))
         else:
           self._backends.append(omp_invocation(config, config.targets["omp"]))
-      elif backend == "rv":
-        self._backends.append(rv_host(config, config.targets["rv"]))
       elif backend == "omp.library-only":
         self._backends.append(omp_invocation(config, config.targets["omp.library-only"]))
       elif backend == "omp.accelerated":
@@ -2304,7 +2232,7 @@ class compiler:
         args += ["-mllvm", "-acpp-stdpar-assume-no-stack-pointers"]
       if self._is_stdpar_unconditional_offload:
         args += ["-D__ACPP_STDPAR_UNCONDITIONAL_OFFLOAD__"]
-      
+
       if self._stdpar_prefetch_mode != None:
         prefetch_mode_string = self._stdpar_prefetch_mode
         prefetch_mode_id = 0
@@ -2321,7 +2249,7 @@ class compiler:
           prefetch_mode_id = 4
         else:
           raise RuntimeError("Invalid value for stdpar-prefetch-mode: "+prefetch_mode_string)
-        
+
         args += ["-D__ACPP_STDPAR_PREFETCH_MODE__="+str(prefetch_mode_id)]
 
     return args + self._common_compiler_args

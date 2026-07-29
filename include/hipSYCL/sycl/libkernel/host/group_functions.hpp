@@ -410,21 +410,20 @@ ACPP_KERNEL_TARGET T __acpp_reduce_over_group(sub_group g, T x, BinaryOperation 
     __acpp_group_barrier(g);
     return tmp;
   } else {
+    T *scratch = static_cast<T *>(g.get_local_memory_ptr());
+    scratch[g.get_local_linear_id()] = x;
+    __acpp_group_barrier(g);
 
- 	T *scratch = static_cast<T *>(g.get_local_memory_ptr());
-	scratch[g.get_local_linear_id()] = x;
-	__acpp_group_barrier(g);
+    if (g.leader()) {
+      for (auto i = 1ul; i < g.get_local_linear_range(); ++i) {
+        scratch[0] = binary_op(scratch[0], scratch[i]);
+      }
+    }
 
-	if (g.leader()) {
-		for (auto i = 1ul; i < g.get_local_linear_range(); ++i) {
-			scratch[0] = binary_op(scratch[0], scratch[i]);
-		}
-	}
-
-	__acpp_group_barrier(g);
-	auto result = scratch[0];
-	__acpp_group_barrier(g);
-	return result;
+    __acpp_group_barrier(g);
+    auto result = scratch[0];
+    __acpp_group_barrier(g);
+    return result;
   }
 }
 

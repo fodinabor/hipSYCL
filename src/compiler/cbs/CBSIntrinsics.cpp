@@ -123,8 +123,6 @@ std::pair<llvm::Value *, CBSIntrinsic::Shape> CBSIntrinsic::getOrCreateValue(
     assert(llvm::dyn_cast<llvm::Argument>(Load->getPointerOperand()));
     return {Load->getPointerOperand(), Shape::UNIFORM};
   }
-  llvm::outs() << "ERROR\n";
-  std::exit(1);
 }
 
 SubCFG &CBSIntrinsic::findSubCfg(std::vector<SubCFG> &SubCfgs, llvm::Instruction *I) {

@@ -23,16 +23,13 @@ using namespace hipsycl::compiler;
 void markLoopParallel(llvm::Function &F, llvm::Loop *L) {
   // LLVM < 12.0.1 might miscompile if conditionals in "parallel" loop (https://llvm.org/PR46666)
 
-  /*
- With H-CBS (and CBS) we do not arrayify Sub-CFG internal allocas, even if they are varying. Thus,
- we can not tell LLVM that accesses to these allocas are loop independent. One solution would be to
- always arrayify these allocas. However, in my opinion and after some benchmarks, the better
- solution is to let LLVM handle arrayification or let them scalarized in case llvm does not
- vectorize.
- */
-
+  // With (H-)CBS, sub-CFG internal allocas are not arrayified, even if they are varying.
+  // Thus, we can not tell LLVM that accesses to these allocas are loop independent.
+  // Always arrayifying them would allow marking the loop parallel, but benchmarks showed
+  // that it is better to leave the arrayification (or scalarization) to LLVM.
   if (llvm::findOptionMDForLoop(L, hipsycl::compiler::MDKind::AllocaProblem)) {
-    llvm::outs() << "ALLOCA PROBLEM. NOT marking loop as parallel\n";
+    HIPSYCL_DEBUG_INFO << "[ParallelMarker] not marking loop as parallel: sub-CFG internal "
+                          "alloca accesses are not loop independent\n";
     return;
   }
 

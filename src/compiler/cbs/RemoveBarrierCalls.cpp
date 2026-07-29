@@ -139,8 +139,6 @@ llvm::PreservedAnalyses RemoveBarrierCallsPass::run(llvm::Function &F,
   if (!removeBarrierCalls(F, *SAA))
     return llvm::PreservedAnalyses::all();
 
-  HIPSYCL_DEBUG_EXECUTE_VERBOSE(F.viewCFG();)
-
   llvm::PreservedAnalyses PA;
   PA.preserve<SplitterAnnotationAnalysis>();
   return PA;

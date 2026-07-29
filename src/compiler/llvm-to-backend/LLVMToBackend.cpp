@@ -501,19 +501,6 @@ bool LLVMToBackendTranslator::translatePreparedIR(llvm::Module &FlavoredModule, 
   return this->translateToBackendFormat(FlavoredModule, out);
 }
 
-class PrintPass : public llvm::PassInfoMixin<PrintPass> {
-public:
-  PrintPass() {}
-
-  static llvm::StringRef name() { return "rv::PrintPass"; }
-  llvm::PreservedAnalyses run(llvm::Function &F, llvm::FunctionAnalysisManager &) {
-    if (F.hasFnAttribute("iskernel")) {
-      F.viewCFG();
-    }
-    return llvm::PreservedAnalyses::all();
-  }
-};
-
 bool LLVMToBackendTranslator::optimizeFlavoredIR(llvm::Module& M, PassHandler& PH) {
   assert(PH.PassBuilder);
   assert(PH.ModuleAnalysisManager);
@@ -540,11 +527,10 @@ bool LLVMToBackendTranslator::optimizeFlavoredIR(llvm::Module& M, PassHandler& P
       });
 #endif
 
-  llvm::outs() << "optimizeFlavoiredIr\n";
-
   llvm::ModulePassManager MPM =
-          PH.PassBuilder->buildPerModuleDefaultPipeline(llvm::OptimizationLevel::O3);
+      PH.PassBuilder->buildPerModuleDefaultPipeline(llvm::OptimizationLevel::O3);
   MPM.run(M, *PH.ModuleAnalysisManager);
+
   return true;
 }
 

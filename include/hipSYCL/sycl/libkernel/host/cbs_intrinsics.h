@@ -11,12 +11,9 @@ enum class ReduceOp {
   BIT_OR = 5,
   BIT_XOR = 6,
 };
-// bit_and,
-// bit_or,
-// bit_xor,
-// logical_and,
-// logical_or
 
+// Pseudo intrinsics lowered by the CBS SubCfgFormation pass; they must never
+// survive into the final binary.
 template <typename T> T __cbs_reduce(T, int);
 
 template <typename T> T __cbs_shuffle(T, uint64_t i);

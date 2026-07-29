@@ -26,9 +26,6 @@
 #include "detail/thread_hierarchy.hpp"
 #include "detail/device_barrier.hpp"
 
-extern "C" uint64_t __acpp_cbs_id_subgroup;
-
-
 namespace hipsycl {
 namespace sycl {
 
@@ -47,7 +44,6 @@ struct nd_item
 {
   /* -- common interface members -- */
   static constexpr int dimensions = Dimensions;
-  // TODO
 
   ACPP_KERNEL_TARGET
   id<Dimensions> get_global_id() const
@@ -168,8 +164,7 @@ struct nd_item
         get_local_id(),
         _local_memory_ptr,
         _sub_local_memory_ptr,
-         get_sub_group()
-    };
+        get_sub_group()};
 #endif
   }
 
@@ -371,11 +366,10 @@ struct nd_item
           detail::host_barrier_type* host_group_barrier = nullptr,
           void* local_memory_ptr = nullptr,
           void* sub_local_memory_ptr = nullptr,
-          size_t subgroup_id = 0
-          )
-    : _offset{offset},
-      _group_id{group_id},
-      _local_id{local_id},
+          size_t subgroup_id = 0)
+    : _offset{offset}, 
+      _group_id{group_id}, 
+      _local_id{local_id}, 
       _local_range{local_range},
       _num_groups{num_groups},
       _global_id{group_id * local_range + local_id},

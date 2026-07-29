@@ -124,10 +124,10 @@ std::vector<fs::path> get_plugin_search_paths()
 bool is_plugin_active(const std::string& name)
 {
   auto backends_active = hipsycl::rt::application::get_settings().get<hipsycl::rt::setting::visibility_mask>();
+  if(backends_active.empty())
+    return true;
   if(name == "omp") // we always need a cpu backend
     return true;
-  if(backends_active.empty())
-    return false;
 
   hipsycl::rt::backend_id id;
   if(name == "cuda") {

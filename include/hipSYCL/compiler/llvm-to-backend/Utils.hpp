@@ -99,12 +99,7 @@ inline auto withPassBuilderAndMAM(F&& handler) {
   llvm::FunctionAnalysisManager FAM;
   llvm::CGSCCAnalysisManager CGAM;
   llvm::ModuleAnalysisManager MAM;
-  llvm::PipelineTuningOptions TuningOptions{};
-  // If we use RV, then we can not optimize to much
-  // E.g., no loop unrolling or interleaving
-  // (Do not change the numer of iterations of the loop)
-
-  llvm::PassBuilder PB{nullptr, TuningOptions};
+  llvm::PassBuilder PB;
   PB.registerModuleAnalyses(MAM);
   PB.registerCGSCCAnalyses(CGAM);
   PB.registerFunctionAnalyses(FAM);

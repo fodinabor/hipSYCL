@@ -56,8 +56,6 @@
 #include <iterator>
 #include <numeric>
 
-#define DEBUG_SUBCFG_FORMATION
-
 #define PASS_PREFIX_STR "[SubCFG]"
 
 namespace hipsycl::compiler::cbs {
@@ -606,8 +604,6 @@ SubCFG::SubCFG(llvm::BasicBlock *EntryBarrier, llvm::AllocaInst *LastBarrierIdSt
     : EntryId_(BarrierIds.lookup(EntryBarrier)), EntryBarrier_(EntryBarrier),
       LastBarrierIdStorage_(LastBarrierIdStorage), EntryBB_(EntryBarrier->getSingleSuccessor()),
       LoadBB_(nullptr), PreHeader_(nullptr), Dim(Dim), HI(HI) {
-  // if (!EntryBB_)
-  //  EntryBarrier->getParent()->viewCFG();
   assert(EntryBB_);
 
   //assert(HI.ContiguousIdx && "Must have found __acpp_cbs_local_id_{x,y,z}");
@@ -749,8 +745,6 @@ void SubCFG::arrayifyMultiSubCfgValues(
 
   auto *ContiguousIdx = HI.ContiguousIdx;
 
-  HIPSYCL_DEBUG_ERROR << "[SubCFG] ARRAIFY \n";
-
   for (auto *BB : Blocks_) {
     for (auto &I : *BB) {
       if (&I == ContiguousIdx || isLoadFromGV(&I, F, cbs::WorkGroupSharedMemory) ||
@@ -766,7 +760,7 @@ void SubCFG::arrayifyMultiSubCfgValues(
                     UI->getParent() == I.getParent() && UI->comesBefore(&I)) &&
                    OtherCFGBlocks.contains(UI->getParent());
           })) {
-        HIPSYCL_DEBUG_ERROR << "[SubCFG] USE in another subcfg \n";
+        HIPSYCL_DEBUG_INFO << "[SubCFG] Use in another subcfg\n";
         // load from an alloca, just widen alloca
         if (auto *LInst = llvm::dyn_cast<llvm::LoadInst>(&I))
           if (auto *Alloca = utils::getLoopStateAllocaForLoad(*LInst)) {
@@ -774,7 +768,7 @@ void SubCFG::arrayifyMultiSubCfgValues(
             continue;
           }
 
-        HIPSYCL_DEBUG_ERROR << "arrayifyMultiSubCfgValues: " << I << "\n";
+        HIPSYCL_DEBUG_INFO << "[SubCFG] arrayifyMultiSubCfgValues: " << I << "\n";
         // GEP from already widened alloca: reuse alloca
         if (auto *GEP = llvm::dyn_cast<llvm::GetElementPtrInst>(&I))
           if (GEP->hasMetadata(MDKind::Arrayified)) {
@@ -791,7 +785,7 @@ void SubCFG::arrayifyMultiSubCfgValues(
           }
 
         auto Shape = VecInfo.getVectorShape(I);
-        HIPSYCL_DEBUG_ERROR << "VECTOR INFO: " << Shape << "\n";
+        HIPSYCL_DEBUG_INFO << "[SubCFG] vector shape: " << Shape << "\n";
 
         const auto isTrivialStepAway = [&F](llvm::Instruction &I,  llvm::StringRef S) {
           auto *V = [&]() -> llvm::Value* {
@@ -889,7 +883,7 @@ void SubCFG::loadMultiSubCfgValues(
         auto *IP = LoadTerm;
         if (!Alloca->isArrayAllocation())
           IP = UniformLoadTerm;
-        HIPSYCL_DEBUG_ERROR << "[SubCFG] Load from Alloca " << *Alloca << " in "
+        HIPSYCL_DEBUG_INFO << "[SubCFG] Load from Alloca " << *Alloca << " in "
                             << IP->getParent()->getName() << "\n";
         auto *Load = utils::loadFromAlloca(Alloca, NewContIdx, IP, Inst->getName());
         LoadToAlloca[Load] = Alloca;
@@ -1492,7 +1486,6 @@ void arrayifyAllocas(llvm::BasicBlock *EntryBlock, llvm::DominatorTree &DT,
     SubCfgsBlocks.insert(SubCfg.getNewBlocks().begin(), SubCfg.getNewBlocks().end());
   {
     llvm::SmallVector<llvm::AllocaInst *, 8> WL;
-    llvm::SmallVector<llvm::AllocaInst *, 8> WLSubCfgInternal;
     for (auto &I : *EntryBlock) {
       if (auto *Alloca = llvm::dyn_cast<llvm::AllocaInst>(&I)) {
         if (Alloca->hasMetadata(MDKind::Arrayified))
@@ -1523,16 +1516,6 @@ void arrayifyAllocas(llvm::BasicBlock *EntryBlock, llvm::DominatorTree &DT,
       }
     }
 
-    for (auto *I : WLSubCfgInternal) {
-      for (auto &SubCfg : SubCfgs) {
-        llvm::IRBuilder AllocaBuilder{SubCfg.getLoadBB()->getFirstNonPHI()};
-        auto* AllocaClone = I->clone();
-        AllocaBuilder.Insert(AllocaClone);
-        llvm::replaceDominatedUsesWith(I, AllocaClone, DT, SubCfg.getLoadBB());
-      }
-      I->eraseFromParent();
-    }
-
     for (auto *I : WL) {
       llvm::IRBuilder AllocaBuilder{I};
       llvm::Type *AllocType = I->getAllocatedType();
@@ -1540,7 +1523,7 @@ void arrayifyAllocas(llvm::BasicBlock *EntryBlock, llvm::DominatorTree &DT,
         auto ArrSize = ArrSizeC->getLimitedValue();
         if (ArrSize > 1) {
           AllocType = llvm::ArrayType::get(AllocType, ArrSize);
-          llvm::outs() << "Caution, alloca was array\n";
+          HIPSYCL_DEBUG_WARNING << "[SubCFG] Caution, alloca was array\n";
         }
       }
 
@@ -1834,13 +1817,7 @@ void formSubCfgGeneric(llvm::Function &F, llvm::LoopInfo &LI, llvm::DominatorTre
     HIPSYCL_DEBUG_INFO << "Create SubCFG from " << Barrier->getName() << "(" << Barrier
                        << ") id: " << Id << "\n";
     if (Id != ExitBarrierId) {
-      if (!Barrier->getSingleSuccessor()) {
-        if (HI.Level == HierarchicalLevel::H_CBS_SUBGROUP) {
-          llvm::outs() << "SUB\n";
-        }
-        llvm::outs() << F;
-        llvm::outs() << "NSS: " << Barrier->getName() << "\n";
-      }
+      assert(Barrier->getSingleSuccessor() && "barrier block must have a single successor");
       SubCFGs.emplace_back(Barrier, LastBarrierIdStorage, Barriers, SAA, state.Dim, HI);
     }
   }
@@ -1906,7 +1883,7 @@ void formSubCfgGeneric(llvm::Function &F, llvm::LoopInfo &LI, llvm::DominatorTre
 
 void formSubCfgs(llvm::Function &F, llvm::LoopInfo &LI, llvm::DominatorTree &DT,
                  llvm::PostDominatorTree &PDT, const SplitterAnnotationInfo &SAA, State state) {
-  HIPSYCL_DEBUG_ERROR << "[SubCFG] Kernel is " << state.Dim << "-dimensional\n";
+  HIPSYCL_DEBUG_INFO << "[SubCFG] Kernel is " << state.Dim << "-dimensional\n";
 
   const auto LocalSize = getLocalSizeValues(F, state);
   auto *Entry = &F.getEntryBlock();
@@ -2048,11 +2025,9 @@ bool SubCfgFormationPassLegacy::runOnFunction(llvm::Function &F) {
   auto &PDT = getAnalysis<llvm::PostDominatorTreeWrapperPass>().getPostDomTree();
   auto &LI = getAnalysis<llvm::LoopInfoWrapperPass>().getLoopInfo();
 
-  assert(false);
-  // if (utils::hasBarriers(F, SAA) || utils::hasSubBarriers(F, SAA))
-  formSubCfgs(F, LI, DT, PDT, SAA, {});
-  // else
-  // createLoopsAroundKernel(F, DT, LI, PDT, {});
+  // The hierarchical CBS implementation only supports the new pass manager
+  // (registerCBSPipeline); this pass is only registered for LLVM < 16.
+  llvm_unreachable("SubCfgFormationPassLegacy is not supported with hierarchical CBS");
 
   return true;
 }
