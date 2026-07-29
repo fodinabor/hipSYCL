@@ -159,7 +159,7 @@ llvm::CallInst *createBarrier(llvm::Instruction *InsertBefore, SplitterAnnotatio
 
 bool isCBSIntrinsic(llvm::Function *F) {
   std::array arr{"__cbs_reduce", "__cbs_shift_left", "__cbs_broadcast", "__cbs_shuffle",
-                 "__cbs_shift_right"};
+                 "__cbs_shift_right", "__cbs_extract"};
   return std::any_of(arr.begin(), arr.end(),
                      [&](std::string_view str) { return F->getName().contains(str); });
 }

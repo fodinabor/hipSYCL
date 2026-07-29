@@ -1136,6 +1136,24 @@ void SubCFG::fixSingleSubCfgValues(
               continue;
             }
 
+          if (!llvm::isa<llvm::PHINode>(I) && !OPI->mayReadOrWriteMemory() &&
+              llvm::all_of(OPI->operands(), [&](llvm::Value *Op) {
+                auto *OpInst = llvm::dyn_cast<llvm::Instruction>(Op);
+                return !OpInst || DT.dominates(OpInst, &I);
+              })) {
+            // The operand can be rematerialized directly at the use. This is required for
+            // correctness (not just cheaper than a spill): a value that is recalculated
+            // per work-item inside this sub-CFG's work-item loop (e.g. the contiguous index
+            // of an outer hierarchy level) must not be spilled to a single-element alloca
+            // and reloaded in the preheader, where it would yield the value of a previous
+            // work-item (or garbage on the first iteration).
+            HIPSYCL_DEBUG_INFO << "[SubCFG] Rematerialize " << *OPI << " for use in " << I << "\n";
+            auto *Clone = OPI->clone();
+            Clone->setName(OPI->getName());
+            Clone->insertBefore(I.getIterator());
+            I.replaceUsesOfWith(OPI, Clone);
+            continue;
+          }
           llvm::AllocaInst *Alloca = nullptr;
           if (auto *RemAlloca = RemappedInstAllocaMap.lookup(OPI))
             Alloca = RemAlloca;
@@ -1146,8 +1164,8 @@ void SubCFG::fixSingleSubCfgValues(
             HIPSYCL_DEBUG_INFO << "[SubCFG] No alloca, yet for " << *OPI << "\n";
             Alloca = utils::arrayifyInstruction(
                 AllocaIP, OPI, ContiguousIdx,
-                VecInfo.getVectorShape(I).isUniform() ? nullptr : ReqdArrayElements);
-            VecInfo.setVectorShape(*Alloca, VecInfo.getVectorShape(I));
+                VecInfo.getVectorShape(*OPI).isUniform() ? nullptr : ReqdArrayElements);
+            VecInfo.setVectorShape(*Alloca, VecInfo.getVectorShape(*OPI));
           }
 
           auto Idx = ContiguousIdx;
@@ -1484,9 +1502,9 @@ void arrayifyAllocas(llvm::BasicBlock *EntryBlock, llvm::DominatorTree &DT,
             }))
           continue;
 
-        if (auto shape = VecInfo.getVectorShape(*Alloca); shape.isUniform()) {
-          continue;
-        }
+        // Note: do NOT skip allocas with uniform vector shape here: entry-block values
+        // default to a uniform shape (out-of-region), and even a genuinely uniform
+        // pointer may hold work-item-varying data.
         if (auto SubCfg = isAllocaSubCfgInternal(Alloca, SubCfgs, DT)) {
           if (*SubCfg) {
             if (HI.Level == HierarchicalLevel::H_CBS_SUBGROUP || HI.Level == HierarchicalLevel::CBS) {
@@ -1761,10 +1779,11 @@ void formSubCfgGeneric(llvm::Function &F, llvm::LoopInfo &LI, llvm::DominatorTre
                        llvm::ArrayRef<llvm::Value *> LocalSize, llvm::Value *ReqdArrayElements,
                        HierarchicalSplitInfo HI) {
   auto *Entry = &F.getEntryBlock();
-  for (auto LocalSizeV : LocalSize) {
-    if (auto I = llvm::dyn_cast<llvm::Instruction>(LocalSizeV))
-      I->moveBefore(Entry->getTerminator());
-  }
+  // Note: the LocalSize values are either constants, or instructions that already reside
+  // in the entry block (see getLocalSizeValues). Do NOT move them here: for multi-dim
+  // kernels their product (ReqdArrayElements) has already been computed after them, and
+  // moving the loads to the end of the entry block would place them after their user,
+  // producing invalid IR that the optimizer folds into poison/unreachable.
 
   std::vector<llvm::BasicBlock *> Blocks;
   {
