@@ -416,6 +416,46 @@ template <typename T> T work_inclusive_scan(__acpp_sscp_algorithm_op op, T x) {
   return x;
 }
 
+template <typename T> T sub_exclusive_scan(__acpp_sscp_algorithm_op op, T x, T init) {
+  const size_t lid = __acpp_sscp_get_subgroup_local_id();
+  const size_t lrange = __acpp_sscp_get_subgroup_size();
+  T *scratch = static_cast<T *>(__acpp_sub_group_shared_memory);
+
+  scratch[lid] = x;
+  __acpp_cbs_sub_barrier();
+
+  if (lid == 0) {
+    T acc = init;
+    for (size_t i = 0; i < lrange; ++i) {
+      T next = binary_op(op, acc, scratch[i]);
+      scratch[i] = acc;
+      acc = next;
+    }
+  }
+
+  __acpp_cbs_sub_barrier();
+  T tmp = scratch[lid];
+  __acpp_cbs_sub_barrier();
+
+  return tmp;
+}
+
+template <typename T> T work_exclusive_scan(__acpp_sscp_algorithm_op op, T x, T init) {
+  // Inclusive scan, then shift the result to the next work-item and prepend the init value.
+  x = work_inclusive_scan(op, x);
+
+  T *scratch = static_cast<T *>(__acpp_work_group_shared_memory);
+  const size_t lid = __acpp_sscp_typed_get_local_linear_id<3, size_t>();
+
+  scratch[lid] = x;
+  __acpp_cbs_barrier();
+
+  T tmp = lid == 0 ? init : binary_op(op, init, scratch[lid - 1]);
+  __acpp_cbs_barrier();
+
+  return tmp;
+}
+
 
 
 // TODO floats
@@ -457,6 +497,12 @@ __acpp_sscp_algorithm_op op, __acpp_##T x) {                                    
 return LEVEL##_inclusive_scan(op, x);                                                                  \
 };
 
+#define EXCLUSIVE_SCAN(LEVEL, T, TNAME)                                                            \
+  HIPSYCL_SSCP_CONVERGENT_BUILTIN __acpp_##T __acpp_sscp_##LEVEL##_group_exclusive_scan_##TNAME(   \
+      __acpp_sscp_algorithm_op op, __acpp_##T x, __acpp_##T init) {                                \
+    return LEVEL##_exclusive_scan(op, x, init);                                                    \
+  };
+
 // TODO ALL VARIANTS DOES NOT SUPPORT FLOATS
 
 ALL_VARIANTS(BROADCAST)
@@ -465,7 +511,9 @@ ALL_VARIANTS(SHIFT_LEFT)
 ALL_VARIANTS(SHIFT_RIGHT)
 ALL_VARIANTS(SELECT)
 ALL_VARIANTS(INCLUSIVE_SCAN)
+ALL_VARIANTS(EXCLUSIVE_SCAN)
 
 
 ALL_F(INCLUSIVE_SCAN)
+ALL_F(EXCLUSIVE_SCAN)
 ALL_F(REDUCE)
