@@ -12,7 +12,7 @@
 #include "../sycl_test_suite.hpp"
 #include "group_functions.hpp"
 
-#if false
+#ifdef HIPSYCL_ENABLE_GROUP_ALGORITHM_TESTS
 
 BOOST_FIXTURE_TEST_SUITE(group_functions_tests, reset_device_fixture)
 
