@@ -99,8 +99,6 @@ template <class PtrSet> struct PtrSetWrapper {
   auto end() -> decltype(Set.end()) { return Set.end(); }
 };
 
-bool isExtractIntrinsic(const llvm::Function* F);
-
 void replaceUsesOfGVWith(llvm::Function &F, llvm::StringRef GlobalVarName, llvm::Value *To, llvm::StringRef LogPrefix = "");
 
 llvm::Loop *updateDtAndLi(llvm::LoopInfo &LI, llvm::DominatorTree &DT, const llvm::BasicBlock *B,

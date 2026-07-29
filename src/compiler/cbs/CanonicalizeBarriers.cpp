@@ -134,6 +134,8 @@ bool canonicalizeBarriers(llvm::Function &F, SplitterAnnotationInfo &SAA) {
     llvm::BasicBlock *BB = Barrier->getParent();
     if (utils::isSubBarrier(Barrier, SAA)) {
       HIPSYCL_DEBUG_INFO << "[Canonicalize] Subbarrier in: " << BB->getName() << "\n";
+    } else {
+      HIPSYCL_DEBUG_INFO << "[Canonicalize] Barrier in: " << BB->getName() << "\n";
     }
 
     // Split post barrier first cause it does not make the barrier
@@ -142,7 +144,7 @@ bool canonicalizeBarriers(llvm::Function &F, SplitterAnnotationInfo &SAA) {
 
     // looses conditional branches if in the same BB as a barrier, must split if multiple successors
     if (T->getPrevNode() != Barrier || T->getNumSuccessors() > 1) {
-      //HIPSYCL_DEBUG_INFO << "[Canonicalize] Splitting after barrier in: " << BB->getName() << "\n";
+      HIPSYCL_DEBUG_INFO << "[Canonicalize] Splitting after barrier in: " << BB->getName() << "\n";
       llvm::BasicBlock *NewB = SplitBlock(BB, Barrier->getNextNode());
       NewB->setName(BB->getName() + ".postbarrier");
       Changed = true;
@@ -162,7 +164,7 @@ bool canonicalizeBarriers(llvm::Function &F, SplitterAnnotationInfo &SAA) {
     if (BB == Entry && (&BB->front() == Barrier))
       continue;
 
-    //HIPSYCL_DEBUG_INFO << "[Canonicalize] Splitting before barrier in: " << BB->getName() << "\n";
+    HIPSYCL_DEBUG_INFO << "[Canonicalize] Splitting before barrier in: " << BB->getName() << "\n";
 
     llvm::BasicBlock *NewB = SplitBlock(BB, Barrier);
     NewB->takeName(BB);

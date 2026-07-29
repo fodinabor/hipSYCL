@@ -130,10 +130,6 @@ bool fillTransitiveSplitterCallers(llvm::Function &F,
   llvm::SmallVector<llvm::BasicBlock *, 8> Blocks;
   std::transform(F.begin(), F.end(), std::back_inserter(Blocks), [](auto &BB) { return &BB; });
 
-  if (hipsycl::llvmutils::starts_with(F.getName(), "__hipsycl_sscp")) {
-    HIPSYCL_DEBUG_WARNING << "[LoopSplitterInlining] " << F.getName() << " B!\n";
-  }
-
   if (fillTransitiveSplitterCallers(Blocks, SAA, FuncsWSplitter,
                                     InIntrinsic ||
 				    hipsycl::llvmutils::starts_with(F.getName(), "__acpp_sscp"))) {

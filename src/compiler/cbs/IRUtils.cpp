@@ -28,13 +28,6 @@
 namespace hipsycl::compiler::utils {
 using namespace hipsycl::compiler::cbs;
 
-bool isExtractIntrinsic(const llvm::Function *F) {
-  if (!F) {
-    return false;
-  }
-  return F->getName().contains("extract");
-}
-
 void replaceUsesOfGVWith(llvm::Function &F, llvm::StringRef GlobalVarName, llvm::Value *To, llvm::StringRef LogPrefix) {
   auto M = F.getParent();
   auto GV = M->getGlobalVariable(GlobalVarName);

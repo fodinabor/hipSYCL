@@ -52,8 +52,7 @@ bool hipsycl::compiler::SplitterAnnotationInfo::analyzeModule(llvm::Module &M) {
   // annotation -> need to remove sub splitter from splitter..
   for (auto *SubSplitter : SubSplitterFuncs) {
     if (SplitterFuncs.erase(SubSplitter)) {
-      HIPSYCL_DEBUG_INFO << "Yeah, " << SubSplitter->getName() <<
- " is a sub splitter, no splitter\n";
+      HIPSYCL_DEBUG_INFO << "Yeah, " << SubSplitter->getName() << " is a sub splitter, no splitter\n";
     }
   }
 
